@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Forms;
@@ -46,6 +47,7 @@ public partial class SecondaryTaskbarWindow : Window, INotifyPropertyChanged, IS
         SourceInitialized += OnSourceInitialized;
         _windowTracker.WindowsChanged += OnWindowsChanged;
         TaskbarStateSnapshotStore.StateChanged += OnTaskbarStateChanged;
+        ExplorerTaskbarSnapshotStore.SnapshotChanged += OnExplorerTaskbarSnapshotChanged;
         AppSettingsService.SettingsChanged += OnSettingsChanged;
         UpdateAlignment();
         UpdateItems(_windowTracker.CurrentWindows);
@@ -123,6 +125,7 @@ public partial class SecondaryTaskbarWindow : Window, INotifyPropertyChanged, IS
     {
         _windowTracker.WindowsChanged -= OnWindowsChanged;
         TaskbarStateSnapshotStore.StateChanged -= OnTaskbarStateChanged;
+        ExplorerTaskbarSnapshotStore.SnapshotChanged -= OnExplorerTaskbarSnapshotChanged;
         AppSettingsService.SettingsChanged -= OnSettingsChanged;
         _appBar?.Dispose();
     }
@@ -159,6 +162,22 @@ public partial class SecondaryTaskbarWindow : Window, INotifyPropertyChanged, IS
         UpdateItems(_currentWindows);
     }
 
+    private void OnExplorerTaskbarSnapshotChanged(object? sender, EventArgs e)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.BeginInvoke(new Action(() => UpdateItems(_currentWindows)));
+            return;
+        }
+
+        if (FullscreenApplicationDetector.IsFullscreenApplicationActive(out _))
+        {
+            return;
+        }
+
+        UpdateItems(_currentWindows);
+    }
+
     private void OnSettingsChanged(object? sender, EventArgs e)
     {
         FullscreenApplicationDetector.Invalidate();
@@ -171,9 +190,10 @@ public partial class SecondaryTaskbarWindow : Window, INotifyPropertyChanged, IS
     {
         _currentWindows = windows;
         Items.Clear();
-        var items = AppSettingsService.Current.ShowOnlyAppsOnThisMonitor
+        var windowItems = AppSettingsService.Current.ShowOnlyAppsOnThisMonitor
             ? windows.Where(item => item.MonitorDeviceName == _screen.DeviceName)
             : windows;
+        var items = ExplorerTaskbarSnapshotStore.MergePinnedItems(windowItems.ToArray());
 
         foreach (var item in items)
         {
@@ -219,7 +239,15 @@ public partial class SecondaryTaskbarWindow : Window, INotifyPropertyChanged, IS
                 return;
             }
 
-            WindowActions.ActivateOrMinimize(viewModel.Hwnd);
+            if (viewModel.Hwnd != IntPtr.Zero)
+            {
+                WindowActions.ActivateOrMinimize(viewModel.Hwnd);
+            }
+            else
+            {
+                LaunchTaskbarItem(viewModel.Item);
+            }
+
             _windowTracker.Refresh();
         }
     }
@@ -235,8 +263,60 @@ public partial class SecondaryTaskbarWindow : Window, INotifyPropertyChanged, IS
                 return;
             }
 
-            WindowActions.ShowSystemMenu(viewModel.Hwnd);
+            if (viewModel.Hwnd != IntPtr.Zero)
+            {
+                WindowActions.ShowSystemMenu(viewModel.Hwnd);
+            }
+            else
+            {
+                LaunchTaskbarItem(viewModel.Item);
+            }
+
             e.Handled = true;
+        }
+    }
+
+    private static void LaunchTaskbarItem(TaskbarItem item)
+    {
+        var launchPath = string.IsNullOrWhiteSpace(item.LaunchPath)
+            ? item.ProcessPath
+            : item.LaunchPath;
+        if (string.IsNullOrWhiteSpace(launchPath) || !File.Exists(launchPath))
+        {
+            DebugLogger.WriteIfChanged(
+                $"pinned-launch-missing-path-{item.GroupKey}",
+                $"Pinned taskbar launch skipped because no launch path is known: Group={item.GroupKey} Title={item.Title} AppId={item.AppUserModelId} ProcessPath={item.ProcessPath} LaunchPath={item.LaunchPath}");
+            return;
+        }
+
+        try
+        {
+            var startInfo = new System.Diagnostics.ProcessStartInfo(launchPath)
+            {
+                UseShellExecute = true
+            };
+
+            if (string.IsNullOrWhiteSpace(item.LaunchPath) &&
+                !string.IsNullOrWhiteSpace(item.LaunchArguments))
+            {
+                startInfo.Arguments = item.LaunchArguments;
+            }
+
+            var workingDirectory = string.IsNullOrWhiteSpace(item.LaunchWorkingDirectory)
+                ? Path.GetDirectoryName(launchPath)
+                : item.LaunchWorkingDirectory;
+            if (!string.IsNullOrWhiteSpace(workingDirectory) && Directory.Exists(workingDirectory))
+            {
+                startInfo.WorkingDirectory = workingDirectory;
+            }
+
+            System.Diagnostics.Process.Start(startInfo);
+        }
+        catch (Exception exception)
+        {
+            DebugLogger.WriteIfChanged(
+                $"pinned-launch-error-{item.GroupKey}",
+                $"Pinned taskbar launch failed: Group={item.GroupKey} Path={launchPath} {exception.GetType().Name}: {exception.Message}");
         }
     }
 
@@ -343,6 +423,8 @@ public sealed class TaskbarButtonViewModel
     public Visibility OverlayVisibility { get; }
 
     public Visibility ProgressVisibility { get; }
+
+    public Visibility RunningIndicatorVisibility => Hwnd == IntPtr.Zero ? Visibility.Collapsed : Visibility.Visible;
 
     private static bool ShouldShowProgress(TaskbarButtonState? state) =>
         state is not null &&

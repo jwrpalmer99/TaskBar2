@@ -10,7 +10,7 @@ namespace TaskBar2.Services;
 
 internal static class WindowIconProvider
 {
-    public static string GetIconFingerprint(IntPtr hwnd, string? executablePath = null)
+    public static string GetIconFingerprint(IntPtr hwnd, string? executablePath = null, string? iconPath = null)
     {
         var iconHandle = GetWindowIconHandle(hwnd);
         if (iconHandle != IntPtr.Zero)
@@ -18,24 +18,24 @@ internal static class WindowIconProvider
             return $"hicon:{iconHandle.ToInt64():X}";
         }
 
-        executablePath ??= GetExecutablePath(hwnd);
-        if (executablePath is null || !File.Exists(executablePath))
+        var sourcePath = GetIconSourcePath(hwnd, executablePath, iconPath);
+        if (sourcePath is null)
         {
             return "";
         }
 
         try
         {
-            var info = new FileInfo(executablePath);
+            var info = new FileInfo(sourcePath);
             return $"file:{info.FullName.ToUpperInvariant()}:{info.Length}:{info.LastWriteTimeUtc.Ticks}";
         }
         catch
         {
-            return $"file:{executablePath.ToUpperInvariant()}";
+            return $"file:{sourcePath.ToUpperInvariant()}";
         }
     }
 
-    public static ImageSource? GetIcon(IntPtr hwnd, string? executablePath = null)
+    public static ImageSource? GetIcon(IntPtr hwnd, string? executablePath = null, string? iconPath = null)
     {
         var iconHandle = GetWindowIconHandle(hwnd);
         if (iconHandle != IntPtr.Zero)
@@ -43,17 +43,17 @@ internal static class WindowIconProvider
             return CreateImage(iconHandle);
         }
 
-        executablePath ??= GetExecutablePath(hwnd);
-        if (executablePath is null || !File.Exists(executablePath))
+        var sourcePath = GetIconSourcePath(hwnd, executablePath, iconPath);
+        if (sourcePath is null)
         {
             return null;
         }
 
-        using var icon = Icon.ExtractAssociatedIcon(executablePath);
+        using var icon = Icon.ExtractAssociatedIcon(sourcePath);
         return icon is null ? null : CreateImage(icon.Handle);
     }
 
-    public static IntPtr GetIconHandleCopy(IntPtr hwnd, string? executablePath = null)
+    public static IntPtr GetIconHandleCopy(IntPtr hwnd, string? executablePath = null, string? iconPath = null)
     {
         var iconHandle = GetWindowIconHandle(hwnd);
         if (iconHandle != IntPtr.Zero)
@@ -61,14 +61,30 @@ internal static class WindowIconProvider
             return NativeMethods.CopyIcon(iconHandle);
         }
 
-        executablePath ??= GetExecutablePath(hwnd);
-        if (executablePath is null || !File.Exists(executablePath))
+        var sourcePath = GetIconSourcePath(hwnd, executablePath, iconPath);
+        if (sourcePath is null)
         {
             return IntPtr.Zero;
         }
 
-        using var icon = Icon.ExtractAssociatedIcon(executablePath);
+        using var icon = Icon.ExtractAssociatedIcon(sourcePath);
         return icon is null ? IntPtr.Zero : NativeMethods.CopyIcon(icon.Handle);
+    }
+
+    private static string? GetIconSourcePath(IntPtr hwnd, string? executablePath, string? iconPath)
+    {
+        foreach (var path in new[] { iconPath, executablePath })
+        {
+            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            {
+                return path;
+            }
+        }
+
+        executablePath ??= GetExecutablePath(hwnd);
+        return executablePath is not null && File.Exists(executablePath)
+            ? executablePath
+            : null;
     }
 
     private static IntPtr GetWindowIconHandle(IntPtr hwnd)

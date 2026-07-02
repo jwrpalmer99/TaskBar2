@@ -24,3 +24,4 @@ C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Injectee\bin\Re
 C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Injectee\bin\Release-verify\TaskBar2.TrayHook.Injectee.dll
 C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Injectee\bin\Release-verify\TaskBar2.TrayHook.Injectee.pdb
 C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Injectee\bin\Release-verify\EasyHook.dll
+C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Injectee\obj\Release\net48\TaskBar2.TrayHook.Injectee.sourcelink.json

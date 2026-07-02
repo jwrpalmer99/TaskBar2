@@ -52,7 +52,7 @@ namespace TaskBar2 {
                 return;
             }
             _contentLoaded = true;
-            System.Uri resourceLocater = new System.Uri("/TaskBar2;V1.0.0.0;component/traymirrorcontrol.xaml", System.UriKind.Relative);
+            System.Uri resourceLocater = new System.Uri("/TaskBar2;component/traymirrorcontrol.xaml", System.UriKind.Relative);
             
             #line 1 "..\..\..\TrayMirrorControl.xaml"
             System.Windows.Application.LoadComponent(this, resourceLocater);

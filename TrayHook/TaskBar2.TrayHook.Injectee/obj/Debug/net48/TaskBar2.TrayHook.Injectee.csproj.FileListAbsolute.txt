@@ -15,3 +15,4 @@ C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Injectee\bin\De
 C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Injectee\obj\Debug\net48\TaskBar2.430D8DAF.Up2Date
 C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Injectee\obj\Debug\net48\TaskBar2.TrayHook.Injectee.dll
 C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Injectee\obj\Debug\net48\TaskBar2.TrayHook.Injectee.pdb
+C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Injectee\obj\Debug\net48\TaskBar2.TrayHook.Injectee.sourcelink.json

@@ -14,4 +14,8 @@ public sealed record TaskbarItem(
     string ProcessName,
     string ProcessPath,
     string AppUserModelId,
-    string GroupKey);
+    string GroupKey,
+    string IconPath = "",
+    string LaunchPath = "",
+    string LaunchArguments = "",
+    string LaunchWorkingDirectory = "");

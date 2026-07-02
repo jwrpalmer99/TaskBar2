@@ -99,7 +99,8 @@
                                             Height="2"
                                             CornerRadius="1"
                                             VerticalAlignment="Bottom"
-                                            Background="{Binding AccentBrush}" />
+                                            Background="{Binding AccentBrush}"
+                                            Visibility="{Binding RunningIndicatorVisibility}" />
                                 </Grid>
                             </Button>
                         </DataTemplate>

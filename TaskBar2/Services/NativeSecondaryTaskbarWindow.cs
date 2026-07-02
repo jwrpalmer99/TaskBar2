@@ -55,7 +55,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private readonly DispatcherTimer _fullscreenPauseTimer;
     private readonly List<NativeTaskbarButton> _buttons = [];
     private readonly List<NativeTrayButton> _trayButtons = [];
-    private readonly Dictionary<IntPtr, NativeAppIcon> _iconCache = [];
+    private readonly Dictionary<string, NativeAppIcon> _iconCache = [];
     private readonly Dictionary<IntPtr, NativeOverlayIcon> _overlayCache = [];
     private readonly Dictionary<string, NativeTrayIconImage> _trayImageCache = [];
     private readonly Dictionary<string, NativeExplorerButtonImage> _explorerButtonImageCache = [];
@@ -432,6 +432,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return;
         }
 
+        ApplyWindowList(_currentWindows, force: true);
         QueueRender();
     }
 
@@ -540,14 +541,21 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return;
         }
 
-        _visibleWindows = AppSettingsService.Current.ShowOnlyAppsOnThisMonitor
+        var visibleWindowItems = AppSettingsService.Current.ShowOnlyAppsOnThisMonitor
             ? windows.Where(item => item.MonitorDeviceName == _screen.DeviceName).ToArray()
             : windows.ToArray();
+        _visibleWindows = ExplorerTaskbarSnapshotStore.MergePinnedItems(visibleWindowItems);
         _visibleGroups = BuildWindowGroups(_visibleWindows);
 
-        var visibleHandles = _visibleWindows.Select(item => item.Hwnd).ToHashSet();
+        var visibleHandles = _visibleWindows
+            .Where(item => item.Hwnd != IntPtr.Zero)
+            .Select(item => item.Hwnd)
+            .ToHashSet();
+        var visibleIconKeys = _visibleWindows
+            .Select(GetIconCacheKey)
+            .ToHashSet();
         var visibleGroupKeys = _visibleGroups.Select(group => group.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        RemoveUnusedIcons(visibleHandles);
+        RemoveUnusedIcons(visibleHandles, visibleIconKeys);
         RemoveUnusedExplorerButtonImages(visibleGroupKeys);
         var signature = BuildWindowVisualSignature(_visibleGroups);
         if (signature == _windowVisualSignature)
@@ -669,8 +677,14 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return;
         }
 
-        WindowActions.ActivateOrMinimize(button.Group.Representative.Hwnd);
-        _windowTracker.Refresh();
+        if (button.Group.Representative.Hwnd != IntPtr.Zero)
+        {
+            WindowActions.ActivateOrMinimize(button.Group.Representative.Hwnd);
+            _windowTracker.Refresh();
+            return;
+        }
+
+        OpenPinnedGroup(button.Group);
     }
 
     private void OnRightButtonUp(int x, int y)
@@ -835,6 +849,10 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
                 }
             });
         }
+        else if (!group.HasRunning)
+        {
+            _appContextMenu.Items.Add("Open", null, (_, _) => OpenPinnedGroup(group));
+        }
         else
         {
             var item = group.Representative;
@@ -862,6 +880,63 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         }
 
         _appContextMenu.Show(System.Windows.Forms.Control.MousePosition);
+    }
+
+    private void OpenPinnedGroup(NativeTaskbarGroup group)
+    {
+        var cursor = System.Windows.Forms.Control.MousePosition;
+        if (ExplorerTaskbarSnapshotStore.TryForwardClick(group.Items, rightClick: false, cursor.X, cursor.Y))
+        {
+            _windowTracker.Refresh();
+            return;
+        }
+
+        LaunchTaskbarItem(group.Representative);
+        _windowTracker.Refresh();
+    }
+
+    private static void LaunchTaskbarItem(TaskbarItem item)
+    {
+        var launchPath = string.IsNullOrWhiteSpace(item.LaunchPath)
+            ? item.ProcessPath
+            : item.LaunchPath;
+        if (string.IsNullOrWhiteSpace(launchPath) || !File.Exists(launchPath))
+        {
+            DebugLogger.WriteIfChanged(
+                $"pinned-launch-missing-path-{item.GroupKey}",
+                $"Pinned taskbar launch skipped because no launch path is known: Group={item.GroupKey} Title={item.Title} AppId={item.AppUserModelId} ProcessPath={item.ProcessPath} LaunchPath={item.LaunchPath}");
+            return;
+        }
+
+        try
+        {
+            var startInfo = new System.Diagnostics.ProcessStartInfo(launchPath)
+            {
+                UseShellExecute = true
+            };
+
+            if (string.IsNullOrWhiteSpace(item.LaunchPath) &&
+                !string.IsNullOrWhiteSpace(item.LaunchArguments))
+            {
+                startInfo.Arguments = item.LaunchArguments;
+            }
+
+            var workingDirectory = string.IsNullOrWhiteSpace(item.LaunchWorkingDirectory)
+                ? Path.GetDirectoryName(launchPath)
+                : item.LaunchWorkingDirectory;
+            if (!string.IsNullOrWhiteSpace(workingDirectory) && Directory.Exists(workingDirectory))
+            {
+                startInfo.WorkingDirectory = workingDirectory;
+            }
+
+            System.Diagnostics.Process.Start(startInfo);
+        }
+        catch (Exception exception)
+        {
+            DebugLogger.WriteIfChanged(
+                $"pinned-launch-error-{item.GroupKey}",
+                $"Pinned taskbar launch failed: Group={item.GroupKey} Path={launchPath} {exception.GetType().Name}: {exception.Message}");
+        }
     }
 
     private bool AddJumpListMenuItems(NativeTaskbarGroup group)
@@ -1100,6 +1175,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private void RenderGroupUnderline(ID2D1HwndRenderTarget target, NativeTaskbarGroup group, Rectangle bounds, NativeLayout layout)
     {
+        if (!group.HasRunning)
+        {
+            return;
+        }
+
         var accentBrush = group.IsActive ? _activeAccentBrush! : _inactiveAccentBrush!;
         var underlineTop = bounds.Bottom - layout.UnderlineHeight - 1;
         if (!group.HasMultiple)
@@ -1320,7 +1400,8 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private NativeAppIcon? GetIcon(TaskbarItem item)
     {
-        if (_iconCache.TryGetValue(item.Hwnd, out var cached) &&
+        var cacheKey = GetIconCacheKey(item);
+        if (_iconCache.TryGetValue(cacheKey, out var cached) &&
             string.Equals(cached.Fingerprint, item.IconFingerprint, StringComparison.Ordinal))
         {
             cached.EnsureBitmap(_renderTarget!);
@@ -1332,18 +1413,23 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             cached.Dispose();
         }
 
-        var icon = WindowIconProvider.GetIconHandleCopy(item.Hwnd, item.ProcessPath);
+        var icon = WindowIconProvider.GetIconHandleCopy(item.Hwnd, item.ProcessPath, item.IconPath);
         if (icon == IntPtr.Zero)
         {
-            _iconCache.Remove(item.Hwnd);
+            _iconCache.Remove(cacheKey);
             return null;
         }
 
         var nativeIcon = new NativeAppIcon(item.IconFingerprint, icon);
         nativeIcon.EnsureBitmap(_renderTarget!);
-        _iconCache[item.Hwnd] = nativeIcon;
+        _iconCache[cacheKey] = nativeIcon;
         return nativeIcon;
     }
+
+    private static string GetIconCacheKey(TaskbarItem item) =>
+        item.Hwnd != IntPtr.Zero
+            ? $"hwnd:{item.Hwnd.ToInt64():X}"
+            : $"pin:{item.GroupKey}";
 
     private NativeExplorerButtonImage? GetExplorerButtonImage(NativeTaskbarGroup group)
     {
@@ -1983,12 +2069,12 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         _renderTarget = null;
     }
 
-    private void RemoveUnusedIcons(HashSet<IntPtr> visibleHandles)
+    private void RemoveUnusedIcons(HashSet<IntPtr> visibleHandles, HashSet<string> visibleIconKeys)
     {
-        foreach (var hwnd in _iconCache.Keys.Where(hwnd => !visibleHandles.Contains(hwnd)).ToArray())
+        foreach (var key in _iconCache.Keys.Where(key => !visibleIconKeys.Contains(key)).ToArray())
         {
-            _iconCache[hwnd].Dispose();
-            _iconCache.Remove(hwnd);
+            _iconCache[key].Dispose();
+            _iconCache.Remove(key);
         }
 
         foreach (var hwnd in _overlayCache.Keys.Where(hwnd => !visibleHandles.Contains(hwnd)).ToArray())
@@ -2113,10 +2199,13 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
         public bool HasMultiple => Items.Count > 1;
 
-        public bool IsActive => Items.Any(item => item.IsActive);
+        public bool HasRunning => Items.Any(item => item.Hwnd != IntPtr.Zero);
+
+        public bool IsActive => Items.Any(item => item.Hwnd != IntPtr.Zero && item.IsActive);
 
         public TaskbarItem Representative =>
-            Items.FirstOrDefault(item => item.IsActive) ??
+            Items.FirstOrDefault(item => item.Hwnd != IntPtr.Zero && item.IsActive) ??
+            Items.FirstOrDefault(item => item.Hwnd != IntPtr.Zero) ??
             Items.FirstOrDefault() ??
             throw new InvalidOperationException("Taskbar group must contain at least one item.");
     }

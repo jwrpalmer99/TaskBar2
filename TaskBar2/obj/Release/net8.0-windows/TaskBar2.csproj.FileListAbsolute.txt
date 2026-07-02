@@ -107,3 +107,4 @@ C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\bin\Release-verify\runtimes\win-a
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\bin\Release-verify\runtimes\win-x64\native\e_sqlite3.dll
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\bin\Release-verify\runtimes\win-x86\native\e_sqlite3.dll
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\bin\Release-verify\runtimes\browser\lib\net8.0\System.Text.Encodings.Web.dll
+C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\TaskBar2.sourcelink.json
