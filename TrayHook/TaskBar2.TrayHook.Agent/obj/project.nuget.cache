@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "CjGzQxU1KDs=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\Jeremy\\source\\repos\\TaskBar2\\TrayHook\\TaskBar2.TrayHook.Agent\\TaskBar2.TrayHook.Agent.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\Jeremy\\.nuget\\packages\\easyhook\\2.7.7097\\easyhook.2.7.7097.nupkg.sha512"
+  ],
+  "logs": []
+}

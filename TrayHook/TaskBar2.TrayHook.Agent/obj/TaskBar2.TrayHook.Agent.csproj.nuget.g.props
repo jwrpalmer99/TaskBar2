@@ -1,0 +1,81 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<Project ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Condition=" '$(ExcludeRestorePackageImports)' != 'true' ">
+    <RestoreSuccess Condition=" '$(RestoreSuccess)' == '' ">True</RestoreSuccess>
+    <RestoreTool Condition=" '$(RestoreTool)' == '' ">NuGet</RestoreTool>
+    <ProjectAssetsFile Condition=" '$(ProjectAssetsFile)' == '' ">$(MSBuildThisFileDirectory)project.assets.json</ProjectAssetsFile>
+    <NuGetPackageRoot Condition=" '$(NuGetPackageRoot)' == '' ">$(UserProfile)\.nuget\packages\</NuGetPackageRoot>
+    <NuGetPackageFolders Condition=" '$(NuGetPackageFolders)' == '' ">C:\Users\Jeremy\.nuget\packages\;H:\VisualStudio2022\Shared\NuGetPackages</NuGetPackageFolders>
+    <NuGetProjectStyle Condition=" '$(NuGetProjectStyle)' == '' ">PackageReference</NuGetProjectStyle>
+    <NuGetToolVersion Condition=" '$(NuGetToolVersion)' == '' ">7.0.0</NuGetToolVersion>
+  </PropertyGroup>
+  <ItemGroup Condition=" '$(ExcludeRestorePackageImports)' != 'true' ">
+    <SourceRoot Include="C:\Users\Jeremy\.nuget\packages\" />
+    <SourceRoot Include="H:\VisualStudio2022\Shared\NuGetPackages\" />
+  </ItemGroup>
+  <ItemGroup Condition=" '$(ExcludeRestorePackageImports)' != 'true' ">
+    <Content Include="$(NuGetPackageRoot)easyhook\2.7.7097\contentFiles\any\net40\EasyHook32.dll" Condition="Exists('$(NuGetPackageRoot)easyhook\2.7.7097\contentFiles\any\net40\EasyHook32.dll')">
+      <NuGetPackageId>EasyHook</NuGetPackageId>
+      <NuGetPackageVersion>2.7.7097</NuGetPackageVersion>
+      <NuGetItemType>Content</NuGetItemType>
+      <Pack>false</Pack>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>EasyHook32.dll</TargetPath>
+      <Private>True</Private>
+      <Link>EasyHook32.dll</Link>
+    </Content>
+    <Content Include="$(NuGetPackageRoot)easyhook\2.7.7097\contentFiles\any\net40\EasyHook32Svc.exe" Condition="Exists('$(NuGetPackageRoot)easyhook\2.7.7097\contentFiles\any\net40\EasyHook32Svc.exe')">
+      <NuGetPackageId>EasyHook</NuGetPackageId>
+      <NuGetPackageVersion>2.7.7097</NuGetPackageVersion>
+      <NuGetItemType>Content</NuGetItemType>
+      <Pack>false</Pack>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>EasyHook32Svc.exe</TargetPath>
+      <Private>True</Private>
+      <Link>EasyHook32Svc.exe</Link>
+    </Content>
+    <Content Include="$(NuGetPackageRoot)easyhook\2.7.7097\contentFiles\any\net40\EasyHook64.dll" Condition="Exists('$(NuGetPackageRoot)easyhook\2.7.7097\contentFiles\any\net40\EasyHook64.dll')">
+      <NuGetPackageId>EasyHook</NuGetPackageId>
+      <NuGetPackageVersion>2.7.7097</NuGetPackageVersion>
+      <NuGetItemType>Content</NuGetItemType>
+      <Pack>false</Pack>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>EasyHook64.dll</TargetPath>
+      <Private>True</Private>
+      <Link>EasyHook64.dll</Link>
+    </Content>
+    <Content Include="$(NuGetPackageRoot)easyhook\2.7.7097\contentFiles\any\net40\EasyHook64Svc.exe" Condition="Exists('$(NuGetPackageRoot)easyhook\2.7.7097\contentFiles\any\net40\EasyHook64Svc.exe')">
+      <NuGetPackageId>EasyHook</NuGetPackageId>
+      <NuGetPackageVersion>2.7.7097</NuGetPackageVersion>
+      <NuGetItemType>Content</NuGetItemType>
+      <Pack>false</Pack>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>EasyHook64Svc.exe</TargetPath>
+      <Private>True</Private>
+      <Link>EasyHook64Svc.exe</Link>
+    </Content>
+    <Content Include="$(NuGetPackageRoot)easyhook\2.7.7097\contentFiles\any\net40\EasyLoad32.dll" Condition="Exists('$(NuGetPackageRoot)easyhook\2.7.7097\contentFiles\any\net40\EasyLoad32.dll')">
+      <NuGetPackageId>EasyHook</NuGetPackageId>
+      <NuGetPackageVersion>2.7.7097</NuGetPackageVersion>
+      <NuGetItemType>Content</NuGetItemType>
+      <Pack>false</Pack>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>EasyLoad32.dll</TargetPath>
+      <Private>True</Private>
+      <Link>EasyLoad32.dll</Link>
+    </Content>
+    <Content Include="$(NuGetPackageRoot)easyhook\2.7.7097\contentFiles\any\net40\EasyLoad64.dll" Condition="Exists('$(NuGetPackageRoot)easyhook\2.7.7097\contentFiles\any\net40\EasyLoad64.dll')">
+      <NuGetPackageId>EasyHook</NuGetPackageId>
+      <NuGetPackageVersion>2.7.7097</NuGetPackageVersion>
+      <NuGetItemType>Content</NuGetItemType>
+      <Pack>false</Pack>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>EasyLoad64.dll</TargetPath>
+      <Private>True</Private>
+      <Link>EasyLoad64.dll</Link>
+    </Content>
+  </ItemGroup>
+  <PropertyGroup Condition=" '$(ExcludeRestorePackageImports)' != 'true' ">
+    <PkgEasyHook Condition=" '$(PkgEasyHook)' == '' ">C:\Users\Jeremy\.nuget\packages\easyhook\2.7.7097</PkgEasyHook>
+  </PropertyGroup>
+</Project>

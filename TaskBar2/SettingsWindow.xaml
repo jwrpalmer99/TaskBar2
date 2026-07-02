@@ -1,0 +1,140 @@
+<Window x:Class="TaskBar2.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="TaskBar2 Settings"
+        Width="500"
+        Height="720"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen"
+        Background="#F5F5F5">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Text="TaskBar2"
+                   FontSize="20"
+                   FontWeight="SemiBold"
+                   Foreground="#202020" />
+
+        <StackPanel Grid.Row="1" Margin="0,18,0,0">
+            <CheckBox x:Name="ShowOnlyThisMonitorCheckBox"
+                      Content="Show only apps on this monitor"
+                      Margin="0,0,0,10" />
+            <CheckBox Content="Mirror primary notification area"
+                      IsChecked="True"
+                      IsEnabled="False"
+                      Margin="0,0,0,10" />
+            <CheckBox x:Name="EnableInvasiveTrayIconHookCheckBox"
+                      Content="Enable invasive live tray icon hook"
+                      Margin="0,0,0,10" />
+            <CheckBox x:Name="EnableElevatedTrayIconHookAgentCheckBox"
+                      Content="Run tray hook agent elevated"
+                      Margin="0,0,0,10" />
+            <CheckBox x:Name="ShowAllTrayIconsCheckBox"
+                      Content="Show ALL tray icons"
+                      Margin="0,0,0,10" />
+            <CheckBox x:Name="UseNativeTaskbarRendererCheckBox"
+                      Content="Use experimental Win32/Direct2D renderer"
+                      Margin="0,0,0,10" />
+            <CheckBox x:Name="PauseUpdatesWhileFullscreenCheckBox"
+                      Content="Pause non-clock updates while fullscreen apps are running"
+                      Margin="0,0,0,10" />
+            <CheckBox x:Name="EnableExperimentalExplorerTaskbarHookCheckBox"
+                      Content="Enable experimental Explorer taskbar hook"
+                      Margin="0,0,0,10" />
+            <CheckBox x:Name="EnableExperimentalExplorerTaskbarMenuProxyCheckBox"
+                      Content="Enable experimental Explorer app menus"
+                      Margin="0,0,0,10" />
+            <Grid Margin="0,6,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="120" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="App button alignment"
+                           VerticalAlignment="Center"
+                           Foreground="#202020" />
+                <ComboBox x:Name="TaskbarButtonAlignmentComboBox"
+                          Grid.Column="1"
+                          Height="28"
+                          VerticalContentAlignment="Center">
+                    <ComboBoxItem Content="Left" />
+                    <ComboBoxItem Content="Center" />
+                </ComboBox>
+            </Grid>
+            <Grid Margin="0,6,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="220" />
+                    <ColumnDefinition Width="56" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Taskbar scale"
+                           VerticalAlignment="Center"
+                           Foreground="#202020" />
+                <Slider x:Name="TaskbarScaleSlider"
+                        Grid.Column="1"
+                        Minimum="0.75"
+                        Maximum="1.75"
+                        TickFrequency="0.05"
+                        IsSnapToTickEnabled="True"
+                        VerticalAlignment="Center"
+                        ValueChanged="TaskbarScaleSlider_ValueChanged" />
+                <TextBlock x:Name="TaskbarScaleTextBlock"
+                           Grid.Column="2"
+                           TextAlignment="Right"
+                           VerticalAlignment="Center"
+                           Foreground="#202020" />
+            </Grid>
+            <Grid Margin="0,6,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="120" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Taskbar polling interval (ms)"
+                           VerticalAlignment="Center"
+                           Foreground="#202020" />
+                <TextBox x:Name="TaskbarPollingIntervalTextBox"
+                         Grid.Column="1"
+                         Height="28"
+                         VerticalContentAlignment="Center" />
+            </Grid>
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="120" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Tray geometry refresh interval (ms)"
+                           VerticalAlignment="Center"
+                           Foreground="#202020" />
+                <TextBox x:Name="TrayRefreshIntervalTextBox"
+                         Grid.Column="1"
+                         Height="28"
+                         VerticalContentAlignment="Center" />
+            </Grid>
+            <TextBlock Text="Settings apply immediately and are saved for the next launch."
+                       TextWrapping="Wrap"
+                       Foreground="#555555" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right">
+            <Button Content="Refresh"
+                    Width="88"
+                    Height="32"
+                    Margin="0,0,8,0"
+                    Click="Refresh_Click" />
+            <Button Content="Apply"
+                    Width="88"
+                    Height="32"
+                    Margin="0,0,8,0"
+                    Click="Apply_Click" />
+            <Button Content="Close"
+                    Width="88"
+                    Height="32"
+                    Click="Close_Click" />
+        </StackPanel>
+    </Grid>
+</Window>

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <HookBuildDate>$([System.DateTime]::UtcNow.ToString('MMdd'))</HookBuildDate>
+    <HookBuildTime>$([System.DateTime]::UtcNow.ToString('HHmm'))</HookBuildTime>
+    <HookBuildStamp>$([System.DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))</HookBuildStamp>
+    <!-- Keep the injected assembly identity stable. Target processes keep .NET assemblies
+         loaded for their lifetime, and changing AssemblyVersion between TaskBar2 builds
+         can make EasyHook fail before the injectee entrypoint is reached. FileVersion and
+         InformationalVersion still identify the actual payload build in diagnostics. -->
+    <AssemblyVersion>1.0.702.1750</AssemblyVersion>
+    <FileVersion>1.0.$(HookBuildDate).$(HookBuildTime)</FileVersion>
+    <InformationalVersion>1.0-dev-$(HookBuildStamp)</InformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="EasyHook" Version="2.7.7097" />
+  </ItemGroup>
+
+</Project>
