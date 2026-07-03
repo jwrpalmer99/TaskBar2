@@ -395,6 +395,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         UpdateFullscreenZOrderState();
 
         var shouldPause = FullscreenApplicationDetector.IsFullscreenApplicationActive(out var fullscreenDescription);
+        HookProcessingPauseService.ApplyFullscreenPauseState(shouldPause);
         if (shouldPause == _nonClockUpdatesPaused)
         {
             return _nonClockUpdatesPaused;

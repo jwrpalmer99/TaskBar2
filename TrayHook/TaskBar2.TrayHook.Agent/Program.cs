@@ -34,6 +34,7 @@ internal static class Program
         {
             using var stopEvent = EventWaitHandle.OpenExisting(options.StopEventName);
             using var globalStopEvent = EventWaitHandle.OpenExisting(options.GlobalStopEventName);
+            using var pauseEvent = OpenOptionalEvent(options.PauseEventName);
             var shadowInjecteePath = HookPayloadShadowCopy.Prepare(injecteePath);
             var agent = new HookAgent(
                 options.AgentName,
@@ -41,6 +42,7 @@ internal static class Program
                 options.StopEventName,
                 options.InjecteeStopEventName,
                 options.GlobalStopEventName,
+                options.PauseEventName,
                 shadowInjecteePath,
                 options.IntervalMs,
                 options.TargetMode,
@@ -48,13 +50,31 @@ internal static class Program
                 options.EnableTrayIconHook,
                 options.EnableExplorerTaskbarHook,
                 options.EnableExplorerTaskbarButtonImageCapture);
-            agent.Run(stopEvent, globalStopEvent);
+            agent.Run(stopEvent, globalStopEvent, pauseEvent);
             return 0;
         }
         catch (Exception exception)
         {
             AgentLog.Write($"Fatal agent error: {exception.GetType().Name}: {exception.Message}");
             return 1;
+        }
+    }
+
+    private static EventWaitHandle? OpenOptionalEvent(string eventName)
+    {
+        if (string.IsNullOrWhiteSpace(eventName))
+        {
+            return null;
+        }
+
+        try
+        {
+            return EventWaitHandle.OpenExisting(eventName);
+        }
+        catch (WaitHandleCannotBeOpenedException)
+        {
+            AgentLog.Write($"Optional pause event not found. Event={eventName}");
+            return null;
         }
     }
 }
@@ -134,6 +154,7 @@ internal sealed class HookAgent
     private readonly string _stopEventName;
     private readonly string _injecteeStopEventName;
     private readonly string _globalStopEventName;
+    private readonly string _pauseEventName;
     private readonly string _injecteePath;
     private readonly int _activeScanIntervalMs;
     private readonly int _idleScanIntervalMs;
@@ -158,6 +179,7 @@ internal sealed class HookAgent
         string stopEventName,
         string injecteeStopEventName,
         string globalStopEventName,
+        string pauseEventName,
         string injecteePath,
         int intervalMs,
         TargetMode targetMode,
@@ -173,6 +195,7 @@ internal sealed class HookAgent
             ? stopEventName
             : injecteeStopEventName;
         _globalStopEventName = globalStopEventName;
+        _pauseEventName = pauseEventName;
         _targetMode = targetMode;
         _targetCatalog = new TrayIconTargetCatalog(showAllTrayIcons);
         _enableTrayIconHook = enableTrayIconHook;
@@ -185,17 +208,36 @@ internal sealed class HookAgent
             _enableTrayIconHook ? TrayIdleScanIntervalMs : ExplorerIdleScanIntervalMs);
     }
 
-    public void Run(WaitHandle stopEvent, WaitHandle globalStopEvent)
+    public void Run(WaitHandle stopEvent, WaitHandle globalStopEvent, WaitHandle? pauseEvent)
     {
-        AgentLog.Write($"Tray hook agent started. Agent={_agentName} ProcessId={_currentProcessId} Session={_sessionId} Pipe={_pipeName} Injectee={DescribeInjectee()} TargetMode={_targetMode} ShowAllTrayIcons={_targetCatalog.ShowAllTrayIcons} EnableTrayIconHook={_enableTrayIconHook} EnableExplorerTaskbarHook={_enableExplorerTaskbarHook} EnableExplorerTaskbarButtonImageCapture={_enableExplorerTaskbarButtonImageCapture} ActiveScanInterval={_activeScanIntervalMs} IdleScanInterval={_idleScanIntervalMs}");
+        AgentLog.Write($"Tray hook agent started. Agent={_agentName} ProcessId={_currentProcessId} Session={_sessionId} Pipe={_pipeName} PauseEvent={_pauseEventName} Injectee={DescribeInjectee()} TargetMode={_targetMode} ShowAllTrayIcons={_targetCatalog.ShowAllTrayIcons} EnableTrayIconHook={_enableTrayIconHook} EnableExplorerTaskbarHook={_enableExplorerTaskbarHook} EnableExplorerTaskbarButtonImageCapture={_enableExplorerTaskbarButtonImageCapture} ActiveScanInterval={_activeScanIntervalMs} IdleScanInterval={_idleScanIntervalMs}");
         var stopHandles = new[] { stopEvent, globalStopEvent };
         while (WaitHandle.WaitAny(stopHandles, 0) == WaitHandle.WaitTimeout)
         {
+            if (pauseEvent is not null && pauseEvent.WaitOne(0))
+            {
+                WaitWhilePaused(stopHandles, pauseEvent);
+                continue;
+            }
+
             var scanResult = ScanOnce();
             WaitHandle.WaitAny(stopHandles, GetNextScanDelay(scanResult));
         }
 
         AgentLog.Write($"Tray hook agent stopping. Agent={_agentName}");
+    }
+
+    private void WaitWhilePaused(WaitHandle[] stopHandles, WaitHandle pauseEvent)
+    {
+        AgentLog.Write($"Tray hook agent scan loop suspended. Agent={_agentName}");
+        while (WaitHandle.WaitAny(stopHandles, 500) == WaitHandle.WaitTimeout)
+        {
+            if (!pauseEvent.WaitOne(0))
+            {
+                AgentLog.Write($"Tray hook agent scan loop resumed. Agent={_agentName}");
+                return;
+            }
+        }
     }
 
     private ScanResult ScanOnce()
@@ -399,6 +441,7 @@ internal sealed class HookAgent
                 _pipeName,
                 _injecteeStopEventName,
                 _globalStopEventName,
+                _pauseEventName,
                 _enableExplorerTaskbarButtonImageCapture);
 
             _injectedProcessIds.Add(process.Id);
@@ -1187,6 +1230,8 @@ internal sealed class AgentOptions
 
     public string GlobalStopEventName { get; set; } = "";
 
+    public string PauseEventName { get; set; } = "";
+
     public string? InjecteePath { get; set; }
 
     public int IntervalMs { get; set; } = 2500;
@@ -1225,6 +1270,7 @@ internal sealed class AgentOptions
         values.TryGetValue("injectee", out var injecteePath);
         values.TryGetValue("agentName", out var agentName);
         values.TryGetValue("injecteeStopEvent", out var injecteeStopEventName);
+        values.TryGetValue("pauseEvent", out var pauseEventName);
         var interval = values.TryGetValue("interval", out var intervalValue) && int.TryParse(intervalValue, out var parsedInterval)
             ? parsedInterval
             : 2500;
@@ -1255,6 +1301,7 @@ internal sealed class AgentOptions
                 ? stopEventName
                 : injecteeStopEventName,
             GlobalStopEventName = globalStopEventName,
+            PauseEventName = string.IsNullOrWhiteSpace(pauseEventName) ? "" : pauseEventName,
             InjecteePath = string.IsNullOrWhiteSpace(injecteePath) ? null : injecteePath,
             IntervalMs = interval,
             TargetMode = targetMode,

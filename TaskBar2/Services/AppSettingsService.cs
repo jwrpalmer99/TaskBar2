@@ -27,6 +27,8 @@ internal sealed class AppSettings
 
     public bool PauseNonClockUpdatesWhileFullscreen { get; set; }
 
+    public bool SuspendHookProcessingWhileFullscreen { get; set; }
+
     public bool ShowTaskbarThumbnailsOnHover { get; set; } = true;
 
     public int TaskbarThumbnailHoverDelayMs { get; set; } = AppSettingsService.DefaultTaskbarThumbnailHoverDelayMs;

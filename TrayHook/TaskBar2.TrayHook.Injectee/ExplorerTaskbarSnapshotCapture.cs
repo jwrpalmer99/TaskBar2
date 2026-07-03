@@ -45,9 +45,10 @@ internal static class ExplorerTaskbarSnapshotCapture
     private static ManualResetEvent? _commandStopEvent;
     private static Thread? _commandThread;
     private static string _lastSignature = "";
+    private static string _pauseEventName = "";
     private static bool _enableButtonImageCapture;
 
-    public static void StartIfExplorer(bool enableButtonImageCapture)
+    public static void StartIfExplorer(bool enableButtonImageCapture, string pauseEventName)
     {
         if (!string.Equals(Process.GetCurrentProcess().ProcessName, "explorer", StringComparison.OrdinalIgnoreCase))
         {
@@ -57,6 +58,7 @@ internal static class ExplorerTaskbarSnapshotCapture
         lock (Sync)
         {
             _enableButtonImageCapture = enableButtonImageCapture;
+            _pauseEventName = pauseEventName;
             if (_thread is not null)
             {
                 return;
@@ -122,10 +124,35 @@ internal static class ExplorerTaskbarSnapshotCapture
             return;
         }
 
+        using var pauseEvent = OpenOptionalEvent(_pauseEventName);
         while (!stopEvent.WaitOne(0))
         {
+            if (pauseEvent is not null && pauseEvent.WaitOne(0))
+            {
+                stopEvent.WaitOne(500);
+                continue;
+            }
+
             CaptureOnce();
             stopEvent.WaitOne(CaptureIntervalMs);
+        }
+    }
+
+    private static EventWaitHandle? OpenOptionalEvent(string eventName)
+    {
+        if (string.IsNullOrWhiteSpace(eventName))
+        {
+            return null;
+        }
+
+        try
+        {
+            return EventWaitHandle.OpenExisting(eventName);
+        }
+        catch (WaitHandleCannotBeOpenedException)
+        {
+            WriteLog($"Optional pause event not found. Event={eventName}");
+            return null;
         }
     }
 

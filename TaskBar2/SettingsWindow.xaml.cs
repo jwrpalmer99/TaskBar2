@@ -18,6 +18,7 @@ public partial class SettingsWindow : Window
         EnableElevatedTrayIconHookAgentCheckBox.IsChecked = AppSettingsService.Current.EnableElevatedTrayIconHookAgent;
         ShowAllTrayIconsCheckBox.IsChecked = AppSettingsService.Current.ShowAllTrayIcons;
         PauseUpdatesWhileFullscreenCheckBox.IsChecked = AppSettingsService.Current.PauseNonClockUpdatesWhileFullscreen;
+        SuspendHookProcessingWhileFullscreenCheckBox.IsChecked = AppSettingsService.Current.SuspendHookProcessingWhileFullscreen;
         ShowTaskbarThumbnailsOnHoverCheckBox.IsChecked = AppSettingsService.Current.ShowTaskbarThumbnailsOnHover;
         TaskbarThumbnailHoverDelayTextBox.Text = AppSettingsService.Current.TaskbarThumbnailHoverDelayMs.ToString();
         EnableExperimentalExplorerTaskbarHookCheckBox.IsChecked = AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook;
@@ -50,6 +51,7 @@ public partial class SettingsWindow : Window
             settings.EnableElevatedTrayIconHookAgent = EnableElevatedTrayIconHookAgentCheckBox.IsChecked == true;
             settings.ShowAllTrayIcons = ShowAllTrayIconsCheckBox.IsChecked == true;
             settings.PauseNonClockUpdatesWhileFullscreen = PauseUpdatesWhileFullscreenCheckBox.IsChecked == true;
+            settings.SuspendHookProcessingWhileFullscreen = SuspendHookProcessingWhileFullscreenCheckBox.IsChecked == true;
             settings.ShowTaskbarThumbnailsOnHover = ShowTaskbarThumbnailsOnHoverCheckBox.IsChecked == true;
             settings.TaskbarThumbnailHoverDelayMs = ParseInterval(
                 TaskbarThumbnailHoverDelayTextBox.Text,

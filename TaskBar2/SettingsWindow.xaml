@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="TaskBar2 Settings"
         Width="500"
-        Height="820"
+        Height="860"
         ResizeMode="NoResize"
         WindowStartupLocation="CenterScreen"
         Background="#F5F5F5">
@@ -137,6 +137,9 @@
                                   Margin="0,0,0,10" />
                         <CheckBox x:Name="PauseUpdatesWhileFullscreenCheckBox"
                                   Content="Pause non-clock updates while fullscreen apps are running"
+                                  Margin="0,0,0,10" />
+                        <CheckBox x:Name="SuspendHookProcessingWhileFullscreenCheckBox"
+                                  Content="Suspend hook processing while fullscreen apps are running"
                                   Margin="0,0,0,10" />
                         <CheckBox x:Name="ShowTaskbarThumbnailsOnHoverCheckBox"
                                   Content="Show taskbar thumbnails on hover"

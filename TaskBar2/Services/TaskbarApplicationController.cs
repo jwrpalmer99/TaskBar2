@@ -35,6 +35,7 @@ internal sealed class TaskbarApplicationController : IDisposable
         AppSettingsService.SettingsChanged += OnSettingsChanged;
         DebugLogger.Write($"TaskBar2 starting. ProcessId={Environment.ProcessId}");
         _trayIconHookServer.Start();
+        HookProcessingPauseService.Reset();
         _trayHookAgentService.ApplySettings();
         TrayIconSnapshotStore.ReapplyVisibilityFilter();
         _windowTracker.Start();
@@ -51,6 +52,7 @@ internal sealed class TaskbarApplicationController : IDisposable
         AppCommands.ExitRequested -= OnExitRequested;
         AppSettingsService.SettingsChanged -= OnSettingsChanged;
         DebugLogger.Write("TaskBar2 stopping.");
+        HookProcessingPauseService.Reset();
         foreach (var taskbar in _taskbars.ToArray())
         {
             taskbar.Close();
@@ -112,6 +114,11 @@ internal sealed class TaskbarApplicationController : IDisposable
 
     private void OnSettingsChanged(object? sender, EventArgs e)
     {
+        if (!AppSettingsService.Current.SuspendHookProcessingWhileFullscreen)
+        {
+            HookProcessingPauseService.Reset();
+        }
+
         _trayHookAgentService.ApplySettings();
         TrayIconSnapshotStore.ReapplyVisibilityFilter();
     }

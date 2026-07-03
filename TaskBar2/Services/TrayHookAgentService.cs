@@ -14,6 +14,7 @@ internal sealed class TrayHookAgentService : IDisposable
 
     private readonly string _pipeName;
     private readonly string _globalStopEventName;
+    private readonly string _pauseEventName;
     private readonly EventWaitHandle _globalStopEvent;
     private readonly AgentProcess _agent;
     private readonly AgentProcess _standardAgent;
@@ -24,6 +25,7 @@ internal sealed class TrayHookAgentService : IDisposable
     {
         _pipeName = pipeName;
         _globalStopEventName = $"Local\\TaskBar2.TrayHook.StopAll.{Process.GetCurrentProcess().SessionId}";
+        _pauseEventName = HookProcessingPauseService.PauseEventName;
         _globalStopEvent = new EventWaitHandle(false, EventResetMode.ManualReset, _globalStopEventName, out var createdNew);
         if (!createdNew)
         {
@@ -32,9 +34,9 @@ internal sealed class TrayHookAgentService : IDisposable
         StopOwnedAgentProcesses();
         StopOwnedEasyHookServices();
 
-        _agent = new AgentProcess(_pipeName, _globalStopEventName, "agent");
-        _standardAgent = new AgentProcess(_pipeName, _globalStopEventName, "standard");
-        _explorerAgent = new AgentProcess(_pipeName, _globalStopEventName, "explorer");
+        _agent = new AgentProcess(_pipeName, _globalStopEventName, _pauseEventName, "agent");
+        _standardAgent = new AgentProcess(_pipeName, _globalStopEventName, _pauseEventName, "standard");
+        _explorerAgent = new AgentProcess(_pipeName, _globalStopEventName, _pauseEventName, "explorer");
     }
 
     public void ApplySettings()
@@ -311,6 +313,7 @@ internal sealed class TrayHookAgentService : IDisposable
     {
         private readonly string _pipeName;
         private readonly string _globalStopEventName;
+        private readonly string _pauseEventName;
         private Process? _process;
         private EventWaitHandle? _stopEvent;
         private EventWaitHandle? _injecteeStopEvent;
@@ -325,10 +328,11 @@ internal sealed class TrayHookAgentService : IDisposable
         private bool _startedWithoutHandle;
         private readonly string _name;
 
-        public AgentProcess(string pipeName, string globalStopEventName, string name)
+        public AgentProcess(string pipeName, string globalStopEventName, string pauseEventName, string name)
         {
             _pipeName = pipeName;
             _globalStopEventName = globalStopEventName;
+            _pauseEventName = pauseEventName;
             _name = name;
         }
 
@@ -469,6 +473,7 @@ internal sealed class TrayHookAgentService : IDisposable
                 "--stopEvent", _stopEventName ?? "",
                 "--injecteeStopEvent", _injecteeStopEventName ?? "",
                 "--globalStopEvent", _globalStopEventName,
+                "--pauseEvent", _pauseEventName,
                 "--interval", "1000",
                 "--targetMode", _targetMode,
                 "--showAllTrayIcons", _showAllTrayIcons ? "true" : "false",

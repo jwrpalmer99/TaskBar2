@@ -1,6 +1,7 @@
 using EasyHook;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -45,8 +46,10 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
     private static SetProgressStateDelegate? _originalSetProgressState;
     private static SetOverlayIconDelegate? _originalSetOverlayIcon;
     private static string _pipeName = "";
+    private static string _pauseEventName = "";
     private static bool _enableExplorerTaskbarButtonImageCapture;
     private static readonly ConcurrentDictionary<IntPtr, LocalHook> TaskbarMethodHooks = [];
+    private static int _unknownMessageSequence;
 
     private LocalHook? _shellNotifyIconWHook;
     private LocalHook? _shellNotifyIconAHook;
@@ -57,9 +60,11 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
         string pipeName,
         string stopEventName,
         string globalStopEventName,
+        string pauseEventName,
         bool enableExplorerTaskbarButtonImageCapture)
     {
         _pipeName = pipeName;
+        _pauseEventName = pauseEventName;
         _enableExplorerTaskbarButtonImageCapture = enableExplorerTaskbarButtonImageCapture;
     }
 
@@ -68,11 +73,13 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
         string pipeName,
         string stopEventName,
         string globalStopEventName,
+        string pauseEventName,
         bool enableExplorerTaskbarButtonImageCapture)
     {
         _pipeName = pipeName;
+        _pauseEventName = pauseEventName;
         _enableExplorerTaskbarButtonImageCapture = enableExplorerTaskbarButtonImageCapture;
-        InjecteeLog.Write($"Injectee Run entered. ProcessId={Process.GetCurrentProcess().Id} ProcessName={Process.GetCurrentProcess().ProcessName} Pipe={pipeName} EnableExplorerTaskbarButtonImageCapture={_enableExplorerTaskbarButtonImageCapture}");
+        InjecteeLog.Write($"Injectee Run entered. ProcessId={Process.GetCurrentProcess().Id} ProcessName={Process.GetCurrentProcess().ProcessName} Pipe={pipeName} PauseEvent={_pauseEventName} EnableExplorerTaskbarButtonImageCapture={_enableExplorerTaskbarButtonImageCapture}");
         using var stopEvent = EventWaitHandle.OpenExisting(stopEventName);
         using var globalStopEvent = EventWaitHandle.OpenExisting(globalStopEventName);
         using var aliveEvent = CreateAliveEvent();
@@ -87,7 +94,7 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
         try
         {
             InstallHooks();
-            ExplorerTaskbarSnapshotCapture.StartIfExplorer(_enableExplorerTaskbarButtonImageCapture);
+            ExplorerTaskbarSnapshotCapture.StartIfExplorer(_enableExplorerTaskbarButtonImageCapture, _pauseEventName);
             var stopHandles = new WaitHandle[] { stopEvent, globalStopEvent };
             while (WaitHandle.WaitAny(stopHandles, 1000) == WaitHandle.WaitTimeout)
             {
@@ -423,18 +430,200 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
 
     private static void PipeWriterLoop(WaitHandle stopEvent)
     {
+        using var pauseEvent = OpenOptionalEvent(_pauseEventName);
+        var coalescedMessages = new Dictionary<string, string>(StringComparer.Ordinal);
+        var coalescedMessageOrder = new List<string>();
         while (!stopEvent.WaitOne(0))
         {
             if (!PendingSignal.WaitOne(500) && PendingMessages.IsEmpty)
             {
+                if (coalescedMessages.Count > 0 && !IsPauseActive(pauseEvent))
+                {
+                    FlushCoalescedMessages(coalescedMessages, coalescedMessageOrder);
+                }
+
                 continue;
             }
 
+            var paused = IsPauseActive(pauseEvent);
             while (PendingMessages.TryDequeue(out var message))
+            {
+                if (paused)
+                {
+                    CoalescePausedMessage(coalescedMessages, coalescedMessageOrder, message);
+                    continue;
+                }
+
+                if (coalescedMessages.Count > 0)
+                {
+                    FlushCoalescedMessages(coalescedMessages, coalescedMessageOrder);
+                }
+
+                TrySend(message);
+            }
+
+            if (coalescedMessages.Count > 0 && !IsPauseActive(pauseEvent))
+            {
+                FlushCoalescedMessages(coalescedMessages, coalescedMessageOrder);
+            }
+        }
+    }
+
+    private static EventWaitHandle? OpenOptionalEvent(string eventName)
+    {
+        if (string.IsNullOrWhiteSpace(eventName))
+        {
+            return null;
+        }
+
+        try
+        {
+            return EventWaitHandle.OpenExisting(eventName);
+        }
+        catch (WaitHandleCannotBeOpenedException)
+        {
+            InjecteeLog.Write($"Optional pause event not found. Event={eventName}");
+            return null;
+        }
+    }
+
+    private static bool IsPauseActive(WaitHandle? pauseEvent)
+    {
+        return pauseEvent is not null && pauseEvent.WaitOne(0);
+    }
+
+    private static void CoalescePausedMessage(
+        IDictionary<string, string> coalescedMessages,
+        ICollection<string> coalescedMessageOrder,
+        string message)
+    {
+        var key = BuildCoalesceKey(message);
+        if (!coalescedMessages.ContainsKey(key))
+        {
+            coalescedMessageOrder.Add(key);
+        }
+
+        coalescedMessages[key] = message;
+    }
+
+    private static void FlushCoalescedMessages(
+        Dictionary<string, string> coalescedMessages,
+        List<string> coalescedMessageOrder)
+    {
+        foreach (var key in coalescedMessageOrder)
+        {
+            if (coalescedMessages.TryGetValue(key, out var message))
             {
                 TrySend(message);
             }
         }
+
+        coalescedMessages.Clear();
+        coalescedMessageOrder.Clear();
+    }
+
+    private static string BuildCoalesceKey(string message)
+    {
+        var messageType = ExtractJsonString(message, "messageType");
+        if (string.Equals(messageType, "ExplorerTaskbarSnapshot", StringComparison.OrdinalIgnoreCase))
+        {
+            return "explorer-taskbar-snapshot";
+        }
+
+        if (string.Equals(messageType, "TaskbarState", StringComparison.OrdinalIgnoreCase))
+        {
+            var hwnd = ExtractJsonPrimitive(message, "hwnd");
+            var taskbarOperation = ExtractJsonString(message, "operation");
+            return "taskbar-state:" + hwnd + ":" + taskbarOperation;
+        }
+
+        var trayOperation = ExtractJsonString(message, "operation");
+        var guid = ExtractJsonString(message, "guid");
+        if (!string.IsNullOrWhiteSpace(guid))
+        {
+            return "tray:" + guid + ":" + trayOperation;
+        }
+
+        var ownerHwnd = ExtractJsonPrimitive(message, "ownerHwnd");
+        var iconId = ExtractJsonPrimitive(message, "iconId");
+        if (!string.IsNullOrWhiteSpace(ownerHwnd) || !string.IsNullOrWhiteSpace(iconId))
+        {
+            return "tray:" + ownerHwnd + ":" + iconId + ":" + trayOperation;
+        }
+
+        return "unknown:" + Interlocked.Increment(ref _unknownMessageSequence).ToString();
+    }
+
+    private static string ExtractJsonString(string json, string propertyName)
+    {
+        var valueStart = FindJsonStringValueStart(json, propertyName);
+        if (valueStart < 0)
+        {
+            return "";
+        }
+
+        var builder = new StringBuilder();
+        for (var index = valueStart; index < json.Length; index++)
+        {
+            var character = json[index];
+            if (character == '"' && (index == valueStart || json[index - 1] != '\\'))
+            {
+                return builder.ToString();
+            }
+
+            builder.Append(character);
+        }
+
+        return "";
+    }
+
+    private static string ExtractJsonPrimitive(string json, string propertyName)
+    {
+        var colonIndex = FindJsonPropertyColon(json, propertyName);
+        if (colonIndex < 0)
+        {
+            return "";
+        }
+
+        var start = colonIndex + 1;
+        while (start < json.Length && char.IsWhiteSpace(json[start]))
+        {
+            start++;
+        }
+
+        var end = start;
+        while (end < json.Length && json[end] != ',' && json[end] != '}')
+        {
+            end++;
+        }
+
+        return start < end
+            ? json.Substring(start, end - start).Trim()
+            : "";
+    }
+
+    private static int FindJsonStringValueStart(string json, string propertyName)
+    {
+        var colonIndex = FindJsonPropertyColon(json, propertyName);
+        if (colonIndex < 0)
+        {
+            return -1;
+        }
+
+        var quoteIndex = json.IndexOf('"', colonIndex + 1);
+        return quoteIndex < 0 ? -1 : quoteIndex + 1;
+    }
+
+    private static int FindJsonPropertyColon(string json, string propertyName)
+    {
+        var property = "\"" + propertyName + "\"";
+        var propertyIndex = json.IndexOf(property, StringComparison.OrdinalIgnoreCase);
+        if (propertyIndex < 0)
+        {
+            return -1;
+        }
+
+        return json.IndexOf(':', propertyIndex + property.Length);
     }
 
     private static void TrySend(string message)

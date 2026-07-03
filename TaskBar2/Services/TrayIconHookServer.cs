@@ -117,6 +117,11 @@ internal sealed class TrayIconHookServer : IDisposable
 
             if (string.Equals(messageType, "ExplorerTaskbarSnapshot", StringComparison.OrdinalIgnoreCase))
             {
+                if (HookProcessingPauseService.IsPaused)
+                {
+                    return;
+                }
+
                 ProcessExplorerTaskbarSnapshotMessage(json);
                 return;
             }

@@ -12,8 +12,8 @@ using System.Reflection;
 
 [assembly: System.Reflection.AssemblyCompanyAttribute("TaskBar2.TrayHook.Injectee")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
-[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0703.1920")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0-dev-20260703192043+1b165e62f0c42e49f0144837cccdd266d0f391ba")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0703.2011")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0-dev-20260703201107+9139b6626a6d77629878439012f905fb036690f7")]
 [assembly: System.Reflection.AssemblyProductAttribute("TaskBar2.TrayHook.Injectee")]
 [assembly: System.Reflection.AssemblyTitleAttribute("TaskBar2.TrayHook.Injectee")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.702.1750")]
