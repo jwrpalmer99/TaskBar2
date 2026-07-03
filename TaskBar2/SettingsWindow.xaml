@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="TaskBar2 Settings"
         Width="500"
-        Height="760"
+        Height="820"
         ResizeMode="NoResize"
         WindowStartupLocation="CenterScreen"
         Background="#F5F5F5">
@@ -138,6 +138,22 @@
                         <CheckBox x:Name="PauseUpdatesWhileFullscreenCheckBox"
                                   Content="Pause non-clock updates while fullscreen apps are running"
                                   Margin="0,0,0,10" />
+                        <CheckBox x:Name="ShowTaskbarThumbnailsOnHoverCheckBox"
+                                  Content="Show taskbar thumbnails on hover"
+                                  Margin="0,0,0,10" />
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="120" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Thumbnail hover delay (ms)"
+                                       VerticalAlignment="Center"
+                                       Foreground="#202020" />
+                            <TextBox x:Name="TaskbarThumbnailHoverDelayTextBox"
+                                     Grid.Column="1"
+                                     Height="28"
+                                     VerticalContentAlignment="Center" />
+                        </Grid>
                         <CheckBox x:Name="EnableExperimentalExplorerTaskbarHookCheckBox"
                                   Content="Enable Explorer taskbar hook"
                                   Margin="0,0,0,10" />

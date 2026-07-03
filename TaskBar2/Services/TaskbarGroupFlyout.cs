@@ -10,12 +10,16 @@ namespace TaskBar2.Services;
 
 internal sealed class TaskbarGroupFlyout : ToolStripDropDown
 {
+    private static readonly TimeSpan CloseDelay = TimeSpan.FromMilliseconds(350);
     private readonly PreviewControl _previewControl;
     private readonly ToolStripControlHost _host;
+    private readonly FormsTimer _autoCloseTimer;
+    private Rectangle _keepOpenBounds;
+    private DateTime? _leaveStartedUtc;
 
     public TaskbarGroupFlyout(IReadOnlyList<TaskbarItem> items, Action<TaskbarItem> activate)
     {
-        AutoClose = true;
+        AutoClose = false;
         Padding = FormsPadding.Empty;
         Margin = FormsPadding.Empty;
         BackColor = Color.FromArgb(31, 31, 31);
@@ -33,6 +37,12 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
             Size = _previewControl.Size
         };
         Items.Add(_host);
+
+        _autoCloseTimer = new FormsTimer
+        {
+            Interval = 75
+        };
+        _autoCloseTimer.Tick += (_, _) => CloseIfPointerLeft();
     }
 
     public string GroupKey => _previewControl.GroupKey;
@@ -52,16 +62,50 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
 
         Show(new Point(x, y));
         _previewControl.SetThumbnailDestination(Handle);
+        _keepOpenBounds = Rectangle.Union(Bounds, buttonBounds);
+        _keepOpenBounds.Inflate(12, 12);
+        _autoCloseTimer.Start();
+    }
+
+    protected override void OnClosed(ToolStripDropDownClosedEventArgs e)
+    {
+        _autoCloseTimer.Stop();
+        base.OnClosed(e);
     }
 
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
+            _autoCloseTimer.Stop();
+            _autoCloseTimer.Dispose();
             _previewControl.ClearThumbnails();
         }
 
         base.Dispose(disposing);
+    }
+
+    private void CloseIfPointerLeft()
+    {
+        if (!Visible)
+        {
+            _autoCloseTimer.Stop();
+            return;
+        }
+
+        if (!_keepOpenBounds.Contains(FormsControl.MousePosition))
+        {
+            var now = DateTime.UtcNow;
+            _leaveStartedUtc ??= now;
+            if (now - _leaveStartedUtc.Value >= CloseDelay)
+            {
+                Close(ToolStripDropDownCloseReason.CloseCalled);
+            }
+
+            return;
+        }
+
+        _leaveStartedUtc = null;
     }
 
     private sealed class PreviewControl : FormsControl

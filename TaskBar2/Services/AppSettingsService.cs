@@ -27,6 +27,10 @@ internal sealed class AppSettings
 
     public bool PauseNonClockUpdatesWhileFullscreen { get; set; }
 
+    public bool ShowTaskbarThumbnailsOnHover { get; set; } = true;
+
+    public int TaskbarThumbnailHoverDelayMs { get; set; } = AppSettingsService.DefaultTaskbarThumbnailHoverDelayMs;
+
     public bool EnableExperimentalExplorerTaskbarHook { get; set; } = true;
 
     public bool EnableExperimentalExplorerTaskbarButtonImageCapture { get; set; }
@@ -53,8 +57,11 @@ internal static class AppSettingsService
 {
     public const int DefaultTaskbarPollingIntervalMs = 750;
     public const int DefaultTrayRefreshIntervalMs = 2000;
+    public const int DefaultTaskbarThumbnailHoverDelayMs = 450;
     public const int MinPollingIntervalMs = 100;
     public const int MaxPollingIntervalMs = 30000;
+    public const int MinTaskbarThumbnailHoverDelayMs = 0;
+    public const int MaxTaskbarThumbnailHoverDelayMs = 5000;
     public const double MinTaskbarScale = 0.75;
     public const double MaxTaskbarScale = 1.75;
     public const double MinTaskbarOpacity = 0.35;
@@ -165,6 +172,7 @@ internal static class AppSettingsService
         settings.TrayRefreshIntervalMs = NormalizeInterval(
             settings.TrayRefreshIntervalMs,
             DefaultTrayRefreshIntervalMs);
+        settings.TaskbarThumbnailHoverDelayMs = NormalizeThumbnailHoverDelay(settings.TaskbarThumbnailHoverDelayMs);
     }
 
     private static int NormalizeInterval(int value, int fallback)
@@ -176,6 +184,9 @@ internal static class AppSettingsService
 
         return Math.Clamp(value, MinPollingIntervalMs, MaxPollingIntervalMs);
     }
+
+    private static int NormalizeThumbnailHoverDelay(int value) =>
+        Math.Clamp(value, MinTaskbarThumbnailHoverDelayMs, MaxTaskbarThumbnailHoverDelayMs);
 
     private static void Normalize(MonitorTaskbarSettings settings)
     {

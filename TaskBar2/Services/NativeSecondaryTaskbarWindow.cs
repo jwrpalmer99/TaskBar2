@@ -30,6 +30,8 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private static readonly TimeSpan PausedFullscreenPollInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan AutoHidePollInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan AutoHideHideDelay = TimeSpan.FromMilliseconds(450);
+    private static readonly TimeSpan HoverPopupPollInterval = TimeSpan.FromMilliseconds(75);
+    private static readonly TimeSpan HoverPopupCloseDelay = TimeSpan.FromMilliseconds(350);
     private const int TbpfNoProgress = 0;
     private const int TbpfIndeterminate = 1;
     private const int TbpfError = 4;
@@ -65,6 +67,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private readonly DispatcherTimer _trayRefreshTimer;
     private readonly DispatcherTimer _renderTimer;
     private readonly DispatcherTimer _groupFlyoutTimer;
+    private readonly DispatcherTimer _hoverPopupPollTimer;
     private readonly DispatcherTimer _fullscreenPauseTimer;
     private readonly DispatcherTimer _autoHideTimer;
     private readonly List<NativeTaskbarButton> _buttons = [];
@@ -106,6 +109,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private string _hoverTrayKey = "";
     private NativeTaskbarButton? _pendingFlyoutButton;
     private TaskbarGroupFlyout? _groupFlyout;
+    private TaskbarHoverLabel? _hoverLabel;
     private int _width;
     private int _height;
     private int _clockTextFormatSize;
@@ -115,6 +119,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private bool _autoHideEnabled;
     private bool _autoHideVisible = true;
     private DateTime _autoHideLastKeepVisibleUtc = DateTime.UtcNow;
+    private DateTime? _hoverPopupLeaveStartedUtc;
     private bool _systemUsesLightTheme;
     private bool _disposed;
 
@@ -141,9 +146,14 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         _renderTimer.Tick += (_, _) => FlushQueuedRender();
         _groupFlyoutTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
         {
-            Interval = TimeSpan.FromMilliseconds(450)
+            Interval = TimeSpan.FromMilliseconds(AppSettingsService.Current.TaskbarThumbnailHoverDelayMs)
         };
         _groupFlyoutTimer.Tick += (_, _) => ShowPendingGroupFlyout();
+        _hoverPopupPollTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+        {
+            Interval = HoverPopupPollInterval
+        };
+        _hoverPopupPollTimer.Tick += (_, _) => PollHoverPopupTarget();
         _fullscreenPauseTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
         {
             Interval = ActiveFullscreenPollInterval
@@ -675,6 +685,14 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
         FullscreenApplicationDetector.Invalidate();
         _trayRefreshTimer.Interval = TimeSpan.FromMilliseconds(AppSettingsService.Current.TrayRefreshIntervalMs);
+        _groupFlyoutTimer.Interval = TimeSpan.FromMilliseconds(AppSettingsService.Current.TaskbarThumbnailHoverDelayMs);
+        if (!AppSettingsService.Current.ShowTaskbarThumbnailsOnHover)
+        {
+            _pendingFlyoutButton = null;
+            _groupFlyoutTimer.Stop();
+            CloseGroupFlyout();
+        }
+
         var newHeight = GetTaskbarHeightPixels();
         if (newHeight != _height)
         {
@@ -969,6 +987,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return;
         }
 
+        CloseGroupFlyout();
         if (button.Group.HasMultiple)
         {
             ShowGroupFlyout(button);
@@ -1010,10 +1029,12 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         var button = HitTestTaskbarButton(x, y);
         if (button is not null)
         {
+            CloseGroupFlyout();
             ShowAppContextMenu(button.Group);
             return;
         }
 
+        CloseGroupFlyout();
         _contextMenu.Show(System.Windows.Forms.Control.MousePosition);
     }
 
@@ -1059,32 +1080,109 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private void ScheduleGroupFlyout(NativeTaskbarButton? button)
     {
-        if (button?.Group.HasMultiple != true)
+        if (!AppSettingsService.Current.ShowTaskbarThumbnailsOnHover)
         {
             _pendingFlyoutButton = null;
             _groupFlyoutTimer.Stop();
+            CloseGroupFlyout();
+
             return;
         }
 
+        if (button is null)
+        {
+            _pendingFlyoutButton = null;
+            _groupFlyoutTimer.Stop();
+            if (IsHoverPopupVisible())
+            {
+                EnsureHoverPopupPollRunning();
+            }
+            else
+            {
+                StopHoverPopupPollIfIdle();
+            }
+
+            return;
+        }
+
+        if (IsHoverPopupVisibleForDifferentGroup(button.Group.Key))
+        {
+            CloseGroupFlyout();
+        }
+
         _pendingFlyoutButton = button;
+        ResetHoverPopupCloseDelay();
         _groupFlyoutTimer.Stop();
         _groupFlyoutTimer.Start();
+        EnsureHoverPopupPollRunning();
     }
 
     private void ShowPendingGroupFlyout()
     {
         _groupFlyoutTimer.Stop();
-        if (_pendingFlyoutButton is not { Group.HasMultiple: true } button)
+        if (!AppSettingsService.Current.ShowTaskbarThumbnailsOnHover ||
+            _pendingFlyoutButton is not { } button)
         {
             return;
         }
 
-        ShowGroupFlyout(button);
+        ShowHoverPopup(button);
+    }
+
+    private void ShowHoverPopup(NativeTaskbarButton button)
+    {
+        if (button.Group.HasRunning)
+        {
+            ShowGroupFlyout(button);
+            return;
+        }
+
+        ShowGroupLabel(button);
+    }
+
+    private void ShowGroupLabel(NativeTaskbarButton button)
+    {
+        if (_disposed || button.Group.HasRunning)
+        {
+            return;
+        }
+
+        ResetHoverPopupCloseDelay();
+        if (_hoverLabel is { Visible: true } && _hoverLabel.GroupKey == button.Group.Key)
+        {
+            return;
+        }
+
+        CloseGroupFlyout();
+        var screenTop = _screen.Bounds.Bottom - _height;
+        var screenBounds = new Rectangle(
+            _screen.Bounds.Left + button.Bounds.Left,
+            screenTop + button.Bounds.Top,
+            button.Bounds.Width,
+            button.Bounds.Height);
+        var label = new TaskbarHoverLabel(
+            button.Group.Key,
+            GetMenuTitle(button.Group.Representative),
+            _systemUsesLightTheme);
+        _hoverLabel = label;
+        label.Closed += (_, _) => OnHoverLabelClosed(label);
+        label.ShowNear(screenBounds, _screen.WorkingArea);
+        _pendingFlyoutButton = null;
+        EnsureHoverPopupPollRunning();
     }
 
     private void ShowGroupFlyout(NativeTaskbarButton button)
     {
-        if (_disposed || !button.Group.HasMultiple)
+        if (_disposed || !button.Group.HasRunning)
+        {
+            return;
+        }
+
+        ResetHoverPopupCloseDelay();
+        var runningItems = button.Group.Items
+            .Where(item => item.Hwnd != IntPtr.Zero)
+            .ToArray();
+        if (runningItems.Length == 0)
         {
             return;
         }
@@ -1101,26 +1199,236 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             screenTop + button.Bounds.Top,
             button.Bounds.Width,
             button.Bounds.Height);
-        _groupFlyout = new TaskbarGroupFlyout(button.Group.Items, item =>
+        var flyout = new TaskbarGroupFlyout(runningItems, item =>
         {
+            OnHoverPreviewActivated();
             WindowActions.Activate(item.Hwnd);
             _windowTracker.Refresh();
         });
-        _groupFlyout.Closed += (_, _) => _groupFlyout = null;
-        _groupFlyout.ShowNear(screenBounds, _screen.WorkingArea);
+        _groupFlyout = flyout;
+        flyout.Closed += (_, _) => OnGroupFlyoutClosed(flyout);
+        flyout.ShowNear(screenBounds, _screen.WorkingArea);
+        _pendingFlyoutButton = null;
+        EnsureHoverPopupPollRunning();
+    }
+
+    private void OnHoverPreviewActivated()
+    {
+        _pendingFlyoutButton = null;
+        _groupFlyoutTimer.Stop();
+        ResetHoverPopupCloseDelay();
+        ClearHoverState();
+    }
+
+    private void OnGroupFlyoutClosed(TaskbarGroupFlyout flyout)
+    {
+        if (ReferenceEquals(_groupFlyout, flyout))
+        {
+            _groupFlyout = null;
+            _pendingFlyoutButton = null;
+            ResetHoverPopupCloseDelay();
+            ClearHoverState();
+        }
+
+        StopHoverPopupPollIfIdle();
+    }
+
+    private void OnHoverLabelClosed(TaskbarHoverLabel label)
+    {
+        if (ReferenceEquals(_hoverLabel, label))
+        {
+            _hoverLabel = null;
+            _pendingFlyoutButton = null;
+            ResetHoverPopupCloseDelay();
+            ClearHoverState();
+        }
+
+        StopHoverPopupPollIfIdle();
     }
 
     private void CloseGroupFlyout()
     {
+        ResetHoverPopupCloseDelay();
+        _pendingFlyoutButton = null;
+        _groupFlyoutTimer.Stop();
+
         var flyout = _groupFlyout;
-        if (flyout is null)
+        _groupFlyout = null;
+        if (flyout is not null)
         {
+            flyout.Close();
+            flyout.Dispose();
+        }
+
+        var label = _hoverLabel;
+        _hoverLabel = null;
+        if (label is not null)
+        {
+            label.Close();
+            label.Dispose();
+        }
+
+        StopHoverPopupPollIfIdle();
+    }
+
+    private void PollHoverPopupTarget()
+    {
+        if (_disposed || !AppSettingsService.Current.ShowTaskbarThumbnailsOnHover)
+        {
+            ClearHoverState();
+            CloseGroupFlyout();
             return;
         }
 
-        _groupFlyout = null;
-        flyout.Close();
-        flyout.Dispose();
+        if (!NativeMethods.GetCursorPos(out var cursor))
+        {
+            ClearHoverState();
+            CloseGroupFlyout();
+            return;
+        }
+
+        var hoveredButton = HitTestTaskbarButtonFromScreen(cursor, out var cursorInTaskbar);
+        if (hoveredButton is null)
+        {
+            if (IsCursorInHoverPopup(cursor))
+            {
+                ResetHoverPopupCloseDelay();
+                return;
+            }
+
+            if (ShouldCloseHoverPopupAfterLeave())
+            {
+                ClearHoverState();
+                CloseGroupFlyout();
+                QueueRender();
+            }
+
+            return;
+        }
+
+        var hoveredGroupKey = hoveredButton.Group.Key;
+        var activeGroupKey = GetActiveHoverPopupGroupKey() ?? _pendingFlyoutButton?.Group.Key ?? "";
+        if (string.Equals(activeGroupKey, hoveredGroupKey, StringComparison.Ordinal))
+        {
+            ResetHoverPopupCloseDelay();
+            return;
+        }
+
+        ResetHoverPopupCloseDelay();
+        _hoverHwnd = hoveredButton.Group.Representative.Hwnd;
+        _hoverGroupKey = hoveredGroupKey;
+        _hoverTrayKey = "";
+
+        var hadVisiblePopup = IsHoverPopupVisible();
+        CloseGroupFlyout();
+        QueueRender();
+
+        if (hadVisiblePopup)
+        {
+            ShowHoverPopup(hoveredButton);
+            return;
+        }
+
+        ScheduleGroupFlyout(hoveredButton);
+    }
+
+    private NativeTaskbarButton? HitTestTaskbarButtonFromScreen(NativeMethods.Point cursor, out bool cursorInTaskbar)
+    {
+        cursorInTaskbar = false;
+        if (_hwnd == IntPtr.Zero || !NativeMethods.GetWindowRect(_hwnd, out var windowRect))
+        {
+            return null;
+        }
+
+        if (cursor.X < windowRect.Left ||
+            cursor.X >= windowRect.Right ||
+            cursor.Y < windowRect.Top ||
+            cursor.Y >= windowRect.Bottom)
+        {
+            return null;
+        }
+
+        cursorInTaskbar = true;
+        var localX = cursor.X - windowRect.Left;
+        var localY = cursor.Y - windowRect.Top;
+        return HitTestTray(localX, localY) is null
+            ? HitTestTaskbarButton(localX, localY)
+            : null;
+    }
+
+    private bool IsCursorInHoverPopup(NativeMethods.Point cursor)
+    {
+        var point = new Point(cursor.X, cursor.Y);
+        return (_groupFlyout is { Visible: true } && _groupFlyout.Bounds.Contains(point)) ||
+               (_hoverLabel is { Visible: true } && _hoverLabel.Bounds.Contains(point));
+    }
+
+    private bool ShouldCloseHoverPopupAfterLeave()
+    {
+        var now = DateTime.UtcNow;
+        if (_hoverPopupLeaveStartedUtc is null)
+        {
+            _hoverPopupLeaveStartedUtc = now;
+            return false;
+        }
+
+        return now - _hoverPopupLeaveStartedUtc.Value >= HoverPopupCloseDelay;
+    }
+
+    private void ResetHoverPopupCloseDelay()
+    {
+        _hoverPopupLeaveStartedUtc = null;
+    }
+
+    private bool IsHoverPopupVisible() =>
+        _groupFlyout is { Visible: true } ||
+        _hoverLabel is { Visible: true };
+
+    private bool IsHoverPopupVisibleForDifferentGroup(string groupKey)
+    {
+        var activeGroupKey = GetActiveHoverPopupGroupKey();
+        return !string.IsNullOrEmpty(activeGroupKey) &&
+               !string.Equals(activeGroupKey, groupKey, StringComparison.Ordinal);
+    }
+
+    private string? GetActiveHoverPopupGroupKey()
+    {
+        if (_groupFlyout is { Visible: true })
+        {
+            return _groupFlyout.GroupKey;
+        }
+
+        if (_hoverLabel is { Visible: true })
+        {
+            return _hoverLabel.GroupKey;
+        }
+
+        return null;
+    }
+
+    private void EnsureHoverPopupPollRunning()
+    {
+        if (!_hoverPopupPollTimer.IsEnabled)
+        {
+            _hoverPopupPollTimer.Start();
+        }
+    }
+
+    private void StopHoverPopupPollIfIdle()
+    {
+        if (_pendingFlyoutButton is null &&
+            _groupFlyout is not { Visible: true } &&
+            _hoverLabel is not { Visible: true })
+        {
+            _hoverPopupPollTimer.Stop();
+        }
+    }
+
+    private void ClearHoverState()
+    {
+        _hoverHwnd = IntPtr.Zero;
+        _hoverGroupKey = "";
+        _hoverTrayKey = "";
     }
 
     private void ShowAppContextMenu(NativeTaskbarGroup group)
@@ -2633,6 +2941,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         _trayRefreshTimer.Stop();
         _renderTimer.Stop();
         _groupFlyoutTimer.Stop();
+        _hoverPopupPollTimer.Stop();
         _fullscreenPauseTimer.Stop();
         _autoHideTimer.Stop();
         CloseGroupFlyout();

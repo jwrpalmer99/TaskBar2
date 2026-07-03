@@ -18,6 +18,8 @@ public partial class SettingsWindow : Window
         EnableElevatedTrayIconHookAgentCheckBox.IsChecked = AppSettingsService.Current.EnableElevatedTrayIconHookAgent;
         ShowAllTrayIconsCheckBox.IsChecked = AppSettingsService.Current.ShowAllTrayIcons;
         PauseUpdatesWhileFullscreenCheckBox.IsChecked = AppSettingsService.Current.PauseNonClockUpdatesWhileFullscreen;
+        ShowTaskbarThumbnailsOnHoverCheckBox.IsChecked = AppSettingsService.Current.ShowTaskbarThumbnailsOnHover;
+        TaskbarThumbnailHoverDelayTextBox.Text = AppSettingsService.Current.TaskbarThumbnailHoverDelayMs.ToString();
         EnableExperimentalExplorerTaskbarHookCheckBox.IsChecked = AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook;
         EnableExperimentalExplorerTaskbarButtonImageCaptureCheckBox.IsChecked = AppSettingsService.Current.EnableExperimentalExplorerTaskbarButtonImageCapture;
         TaskbarPollingIntervalTextBox.Text = AppSettingsService.Current.TaskbarPollingIntervalMs.ToString();
@@ -48,6 +50,10 @@ public partial class SettingsWindow : Window
             settings.EnableElevatedTrayIconHookAgent = EnableElevatedTrayIconHookAgentCheckBox.IsChecked == true;
             settings.ShowAllTrayIcons = ShowAllTrayIconsCheckBox.IsChecked == true;
             settings.PauseNonClockUpdatesWhileFullscreen = PauseUpdatesWhileFullscreenCheckBox.IsChecked == true;
+            settings.ShowTaskbarThumbnailsOnHover = ShowTaskbarThumbnailsOnHoverCheckBox.IsChecked == true;
+            settings.TaskbarThumbnailHoverDelayMs = ParseInterval(
+                TaskbarThumbnailHoverDelayTextBox.Text,
+                settings.TaskbarThumbnailHoverDelayMs);
             settings.EnableExperimentalExplorerTaskbarHook = EnableExperimentalExplorerTaskbarHookCheckBox.IsChecked == true;
             settings.EnableExperimentalExplorerTaskbarButtonImageCapture = EnableExperimentalExplorerTaskbarButtonImageCaptureCheckBox.IsChecked == true;
             AppSettingsService.SetMonitorTaskbarSettings(
@@ -73,6 +79,7 @@ public partial class SettingsWindow : Window
 
         TaskbarPollingIntervalTextBox.Text = AppSettingsService.Current.TaskbarPollingIntervalMs.ToString();
         TrayRefreshIntervalTextBox.Text = AppSettingsService.Current.TrayRefreshIntervalMs.ToString();
+        TaskbarThumbnailHoverDelayTextBox.Text = AppSettingsService.Current.TaskbarThumbnailHoverDelayMs.ToString();
         LoadSelectedMonitorSettings();
     }
 
