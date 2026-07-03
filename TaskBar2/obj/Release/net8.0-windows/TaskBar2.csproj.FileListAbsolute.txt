@@ -148,3 +148,8 @@ C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-hover-verify\TaskBar2.de
 C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-hover-verify\TaskBar2.runtimeconfig.json
 C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-hover-verify\TaskBar2.dll
 C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-hover-verify\TaskBar2.pdb
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-verify\TaskBar2.exe
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-verify\TaskBar2.deps.json
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-verify\TaskBar2.runtimeconfig.json
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-verify\TaskBar2.dll
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-verify\TaskBar2.pdb

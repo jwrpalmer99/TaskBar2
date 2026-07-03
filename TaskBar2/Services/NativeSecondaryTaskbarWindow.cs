@@ -117,6 +117,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private string _suppressNextTrayLeftButtonUpKey = "";
     private bool _renderQueued;
     private bool _nonClockUpdatesPaused;
+    private bool _yieldingTopmostForFullscreen;
     private bool _autoHideEnabled;
     private bool _autoHideVisible = true;
     private DateTime _autoHideLastKeepVisibleUtc = DateTime.UtcNow;
@@ -384,6 +385,8 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return false;
         }
 
+        UpdateFullscreenZOrderState();
+
         var shouldPause = FullscreenApplicationDetector.IsFullscreenApplicationActive(out var fullscreenDescription);
         if (shouldPause == _nonClockUpdatesPaused)
         {
@@ -418,6 +421,67 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         RefreshTray(force: true);
         QueueRender(allowWhilePaused: true);
         return false;
+    }
+
+    private void UpdateFullscreenZOrderState()
+    {
+        if (_hwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var shouldYieldTopmost = FullscreenApplicationDetector.ShouldTaskbarYieldToForegroundFullscreen(
+            GetScreenRect(),
+            out var fullscreenDescription);
+        if (shouldYieldTopmost == _yieldingTopmostForFullscreen)
+        {
+            return;
+        }
+
+        _yieldingTopmostForFullscreen = shouldYieldTopmost;
+        SetTaskbarFullscreenYield(shouldYieldTopmost);
+        DebugLogger.WriteIfChanged(
+            $"native-fullscreen-zorder-{_screen.DeviceName}",
+            shouldYieldTopmost
+                ? $"Native taskbar yielding topmost to foreground fullscreen: Screen={_screen.DeviceName} {fullscreenDescription}"
+                : $"Native taskbar restored topmost after foreground fullscreen: Screen={_screen.DeviceName}");
+    }
+
+    private void SetTaskbarFullscreenYield(bool yieldToFullscreen)
+    {
+        if (_hwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        if (!NativeMethods.SetWindowPos(
+                _hwnd,
+                yieldToFullscreen ? NativeMethods.HWND_BOTTOM : NativeMethods.HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                NativeMethods.SWP_NOMOVE |
+                NativeMethods.SWP_NOSIZE |
+                NativeMethods.SWP_NOACTIVATE |
+                NativeMethods.SWP_NOOWNERZORDER))
+        {
+            DebugLogger.WriteIfChanged(
+                $"native-topmost-failed-{_screen.DeviceName}",
+                $"Native taskbar fullscreen yield update failed: Screen={_screen.DeviceName} Yield={yieldToFullscreen} LastError={Marshal.GetLastWin32Error()}");
+        }
+    }
+
+    private NativeMethods.Rect GetScreenRect()
+    {
+        var bounds = _screen.Bounds;
+        return new NativeMethods.Rect
+        {
+            Left = bounds.Left,
+            Top = bounds.Top,
+            Right = bounds.Right,
+            Bottom = bounds.Bottom
+        };
     }
 
     private void UpdateAutoHideState()
@@ -992,14 +1056,6 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         if (button.Group.HasMultiple)
         {
             ShowGroupFlyout(button);
-            return;
-        }
-
-        var screenX = _screen.Bounds.Left + x;
-        var screenY = _screen.Bounds.Bottom - _height + y;
-        if (TryForwardExplorerTaskbarClick(button, rightClick: false, screenX, screenY))
-        {
-            _windowTracker.Refresh();
             return;
         }
 
@@ -1579,6 +1635,12 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private void OpenPinnedGroup(NativeTaskbarGroup group)
     {
+        if (LaunchTaskbarItem(group.Representative))
+        {
+            _windowTracker.Refresh();
+            return;
+        }
+
         var cursor = System.Windows.Forms.Control.MousePosition;
         if (ExplorerTaskbarSnapshotStore.TryForwardClick(group.Items, rightClick: false, cursor.X, cursor.Y))
         {
@@ -1586,11 +1648,10 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return;
         }
 
-        LaunchTaskbarItem(group.Representative);
         _windowTracker.Refresh();
     }
 
-    private static void LaunchTaskbarItem(TaskbarItem item)
+    private static bool LaunchTaskbarItem(TaskbarItem item)
     {
         var launchPath = string.IsNullOrWhiteSpace(item.LaunchPath)
             ? item.ProcessPath
@@ -1600,7 +1661,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             DebugLogger.WriteIfChanged(
                 $"pinned-launch-missing-path-{item.GroupKey}",
                 $"Pinned taskbar launch skipped because no launch path is known: Group={item.GroupKey} Title={item.Title} AppId={item.AppUserModelId} ProcessPath={item.ProcessPath} LaunchPath={item.LaunchPath}");
-            return;
+            return false;
         }
 
         try
@@ -1625,12 +1686,14 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             }
 
             System.Diagnostics.Process.Start(startInfo);
+            return true;
         }
         catch (Exception exception)
         {
             DebugLogger.WriteIfChanged(
                 $"pinned-launch-error-{item.GroupKey}",
                 $"Pinned taskbar launch failed: Group={item.GroupKey} Path={launchPath} {exception.GetType().Name}: {exception.Message}");
+            return false;
         }
     }
 

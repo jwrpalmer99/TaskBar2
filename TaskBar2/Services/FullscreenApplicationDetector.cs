@@ -12,8 +12,7 @@ internal static class FullscreenApplicationDetector
     private static readonly object Sync = new();
     private static readonly int CurrentProcessId = Environment.ProcessId;
     private static DateTimeOffset _cachedAt;
-    private static bool _cachedActive;
-    private static string _cachedDescription = "";
+    private static DetectionState _cachedState;
     private static IntPtr _shellFullscreenWindow;
 
     public static bool IsFullscreenApplicationActive(out string description)
@@ -25,24 +24,23 @@ internal static class FullscreenApplicationDetector
         }
 
         var now = DateTimeOffset.UtcNow;
-        lock (Sync)
+        var state = GetState(now);
+        description = state.PauseDescription;
+        return state.PauseActive;
+    }
+
+    public static bool ShouldTaskbarYieldToForegroundFullscreen(NativeMethods.Rect monitorRect, out string description)
+    {
+        var state = GetState(DateTimeOffset.UtcNow);
+        if (state.ForegroundCoversMonitor &&
+            IsSameRect(state.ForegroundMonitorRect, monitorRect))
         {
-            if (now - _cachedAt < CacheDuration)
-            {
-                description = _cachedDescription;
-                return _cachedActive;
-            }
+            description = state.ForegroundDescription;
+            return true;
         }
 
-        var active = Detect(out var detectedDescription);
-        lock (Sync)
-        {
-            _cachedAt = now;
-            _cachedActive = active;
-            _cachedDescription = detectedDescription;
-            description = _cachedDescription;
-            return _cachedActive;
-        }
+        description = "";
+        return false;
     }
 
     public static void Invalidate()
@@ -74,14 +72,47 @@ internal static class FullscreenApplicationDetector
             $"Shell fullscreen state changed: Active={entered} Hwnd=0x{hwnd.ToInt64():X}");
     }
 
-    private static bool Detect(out string description)
+    private static DetectionState GetState(DateTimeOffset now)
+    {
+        lock (Sync)
+        {
+            if (now - _cachedAt < CacheDuration)
+            {
+                return _cachedState;
+            }
+        }
+
+        var state = Detect();
+        lock (Sync)
+        {
+            _cachedAt = now;
+            _cachedState = state;
+            return _cachedState;
+        }
+    }
+
+    private static DetectionState Detect()
     {
         var foreground = NativeMethods.GetForegroundWindow();
+        var state = new DetectionState
+        {
+            PauseDescription = "",
+            ForegroundDescription = ""
+        };
+
         var shellFullscreenWindow = GetShellFullscreenWindow();
         if (shellFullscreenWindow != IntPtr.Zero &&
-            IsFullscreenCandidate(shellFullscreenWindow, foreground, allowShellSignal: true, out description))
+            TryGetFullscreenWindowInfo(shellFullscreenWindow, foreground, allowShellSignal: true, out var shellInfo))
         {
-            return true;
+            state.ForegroundCoversMonitor = true;
+            state.ForegroundMonitorRect = shellInfo.MonitorRect;
+            state.ForegroundDescription = BuildDescription(shellInfo);
+            if (IsPauseFullscreenCandidate(shellInfo))
+            {
+                state.PauseActive = true;
+                state.PauseDescription = state.ForegroundDescription;
+                return state;
+            }
         }
 
         if (shellFullscreenWindow != IntPtr.Zero)
@@ -90,13 +121,20 @@ internal static class FullscreenApplicationDetector
         }
 
         if (foreground != IntPtr.Zero &&
-            IsFullscreenCandidate(foreground, foreground, allowShellSignal: false, out description))
+            TryGetFullscreenWindowInfo(foreground, foreground, allowShellSignal: false, out var foregroundInfo))
         {
-            return true;
+            state.ForegroundCoversMonitor = true;
+            state.ForegroundMonitorRect = foregroundInfo.MonitorRect;
+            state.ForegroundDescription = BuildDescription(foregroundInfo);
+            if (IsPauseFullscreenCandidate(foregroundInfo))
+            {
+                state.PauseActive = true;
+                state.PauseDescription = state.ForegroundDescription;
+                return state;
+            }
         }
 
-        description = "";
-        return false;
+        return state;
     }
 
     private static IntPtr GetShellFullscreenWindow()
@@ -118,13 +156,13 @@ internal static class FullscreenApplicationDetector
         }
     }
 
-    private static bool IsFullscreenCandidate(
+    private static bool TryGetFullscreenWindowInfo(
         IntPtr hwnd,
         IntPtr foreground,
         bool allowShellSignal,
-        out string description)
+        out FullscreenWindowInfo info)
     {
-        description = "";
+        info = default;
         if (hwnd == IntPtr.Zero ||
             !NativeMethods.IsWindowVisible(hwnd) ||
             NativeMethods.IsIconic(hwnd))
@@ -164,24 +202,29 @@ internal static class FullscreenApplicationDetector
             return false;
         }
 
-        if (NativeMethods.IsZoomed(hwnd))
-        {
-            return false;
-        }
-
-        if (!LooksLikeFullscreenMode(style))
-        {
-            return false;
-        }
-
         var title = GetWindowTitle(hwnd);
         var processName = GetProcessName(processId);
-        description =
-            $"Hwnd=0x{hwnd.ToInt64():X} Process={processName} Title=\"{title}\" Class={className} " +
-            $"Foreground={hwnd == foreground} Rect={FormatRect(windowRect)} Monitor={FormatRect(monitorRect)} " +
-            $"ShellSignal={allowShellSignal}";
+        info = new FullscreenWindowInfo
+        {
+            Hwnd = hwnd,
+            ProcessId = processId,
+            ProcessName = processName,
+            Title = title,
+            ClassName = className,
+            Style = style,
+            ExStyle = exStyle,
+            WindowRect = windowRect,
+            MonitorRect = monitorRect,
+            IsZoomed = NativeMethods.IsZoomed(hwnd),
+            IsForeground = hwnd == foreground,
+            ShellSignal = allowShellSignal
+        };
         return true;
     }
+
+    private static bool IsPauseFullscreenCandidate(FullscreenWindowInfo info) =>
+        !IsKnownNonGameFullscreenProcess(info.ProcessName) &&
+        (info.ShellSignal || LooksLikeFullscreenMode(info.Style));
 
     private static bool LooksLikeFullscreenMode(long style)
     {
@@ -191,6 +234,19 @@ internal static class FullscreenApplicationDetector
         var isPopup = (style & unchecked((long)0x80000000)) != 0;
 
         return isPopup && !hasCaption && !hasThickFrame && !hasBorder;
+    }
+
+    private static bool IsKnownNonGameFullscreenProcess(string processName)
+    {
+        return processName.Equals("chrome", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("msedge", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("firefox", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("brave", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("opera", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("vivaldi", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("discord", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("ms-teams", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("teams", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryGetCoveredMonitor(
@@ -286,6 +342,42 @@ internal static class FullscreenApplicationDetector
         }
     }
 
+    private static bool IsSameRect(NativeMethods.Rect left, NativeMethods.Rect right) =>
+        Math.Abs(left.Left - right.Left) <= BoundsTolerance &&
+        Math.Abs(left.Top - right.Top) <= BoundsTolerance &&
+        Math.Abs(left.Right - right.Right) <= BoundsTolerance &&
+        Math.Abs(left.Bottom - right.Bottom) <= BoundsTolerance;
+
+    private static string BuildDescription(FullscreenWindowInfo info) =>
+        $"Hwnd=0x{info.Hwnd.ToInt64():X} Process={info.ProcessName} Title=\"{info.Title}\" Class={info.ClassName} " +
+        $"Foreground={info.IsForeground} Rect={FormatRect(info.WindowRect)} Monitor={FormatRect(info.MonitorRect)} " +
+        $"ShellSignal={info.ShellSignal}";
+
     private static string FormatRect(NativeMethods.Rect rect) =>
         $"{rect.Left},{rect.Top},{rect.Right},{rect.Bottom}";
+
+    private struct DetectionState
+    {
+        public bool PauseActive;
+        public string PauseDescription;
+        public bool ForegroundCoversMonitor;
+        public NativeMethods.Rect ForegroundMonitorRect;
+        public string ForegroundDescription;
+    }
+
+    private struct FullscreenWindowInfo
+    {
+        public IntPtr Hwnd;
+        public uint ProcessId;
+        public string ProcessName;
+        public string Title;
+        public string ClassName;
+        public long Style;
+        public long ExStyle;
+        public NativeMethods.Rect WindowRect;
+        public NativeMethods.Rect MonitorRect;
+        public bool IsZoomed;
+        public bool IsForeground;
+        public bool ShellSignal;
+    }
 }

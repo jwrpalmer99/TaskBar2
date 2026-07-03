@@ -5,6 +5,10 @@ namespace TaskBar2.Native;
 
 internal static class NativeMethods
 {
+    internal static readonly IntPtr HWND_TOPMOST = new(-1);
+    internal static readonly IntPtr HWND_NOTOPMOST = new(-2);
+    internal static readonly IntPtr HWND_BOTTOM = new(1);
+
     internal const int GWL_STYLE = -16;
     internal const int GWL_EXSTYLE = -20;
     internal const int GW_OWNER = 4;
@@ -101,6 +105,7 @@ internal static class NativeMethods
     internal const uint SWP_NOSIZE = 0x0001;
     internal const uint SWP_NOACTIVATE = 0x0010;
     internal const uint SWP_FRAMECHANGED = 0x0020;
+    internal const uint SWP_NOOWNERZORDER = 0x0200;
     internal const int WS_CHILD = 0x40000000;
     internal const int WS_VISIBLE = 0x10000000;
     internal const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
