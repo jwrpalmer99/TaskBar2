@@ -76,3 +76,12 @@ C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\EasyLoad64.dll
 C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\TaskBar2.TrayHook.Agent.exe.config
 C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\TaskBar2.TrayHook.Agent.exe
 C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\TaskBar2.TrayHook.Agent.pdb
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\EasyHook32.dll
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\EasyHook32Svc.exe
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\EasyHook64.dll
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\EasyHook64Svc.exe
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\EasyLoad32.dll
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\EasyLoad64.dll
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\TaskBar2.TrayHook.Agent.exe.config
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\TaskBar2.TrayHook.Agent.exe
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\TaskBar2.TrayHook.Agent.pdb

@@ -1,4 +1,4 @@
-using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using TaskBar2.Native;
@@ -9,8 +9,10 @@ internal static class FullscreenApplicationDetector
 {
     private const int BoundsTolerance = 3;
     private static readonly TimeSpan CacheDuration = TimeSpan.FromMilliseconds(350);
+    private static readonly TimeSpan ProcessNameCacheDuration = TimeSpan.FromMinutes(2);
     private static readonly object Sync = new();
     private static readonly int CurrentProcessId = Environment.ProcessId;
+    private static readonly Dictionary<uint, ProcessNameCacheEntry> ProcessNameCache = [];
     private static DateTimeOffset _cachedAt;
     private static DetectionState _cachedState;
     private static IntPtr _shellFullscreenWindow;
@@ -41,6 +43,19 @@ internal static class FullscreenApplicationDetector
 
         description = "";
         return false;
+    }
+
+    public static TaskbarFullscreenState GetTaskbarState(NativeMethods.Rect monitorRect)
+    {
+        var state = GetState(DateTimeOffset.UtcNow);
+        var shouldPause = AppSettingsService.Current.PauseNonClockUpdatesWhileFullscreen && state.PauseActive;
+        var shouldYieldTopmost = state.ForegroundCoversMonitor &&
+                                 IsSameRect(state.ForegroundMonitorRect, monitorRect);
+        return new TaskbarFullscreenState(
+            shouldPause,
+            shouldPause ? state.PauseDescription : "",
+            shouldYieldTopmost,
+            shouldYieldTopmost ? state.ForegroundDescription : "");
     }
 
     public static void Invalidate()
@@ -332,14 +347,64 @@ internal static class FullscreenApplicationDetector
 
     private static string GetProcessName(uint processId)
     {
-        try
+        var now = DateTimeOffset.UtcNow;
+        lock (Sync)
         {
-            using var process = Process.GetProcessById(unchecked((int)processId));
-            return process.ProcessName;
+            if (ProcessNameCache.TryGetValue(processId, out var cached) &&
+                now - cached.CachedAt < ProcessNameCacheDuration)
+            {
+                return cached.Name;
+            }
         }
-        catch
+
+        var processName = QueryProcessName(processId);
+        lock (Sync)
+        {
+            ProcessNameCache[processId] = new ProcessNameCacheEntry(processName, now);
+
+            if (ProcessNameCache.Count > 32)
+            {
+                foreach (var staleProcessId in ProcessNameCache
+                             .Where(entry => now - entry.Value.CachedAt >= ProcessNameCacheDuration)
+                             .Select(entry => entry.Key)
+                             .ToArray())
+                {
+                    ProcessNameCache.Remove(staleProcessId);
+                }
+            }
+        }
+
+        return processName;
+    }
+
+    private static string QueryProcessName(uint processId)
+    {
+        var handle = NativeMethods.OpenProcess(
+            NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            processId);
+        if (handle == IntPtr.Zero)
         {
             return processId.ToString();
+        }
+
+        try
+        {
+            var builder = new StringBuilder(1024);
+            var length = builder.Capacity;
+            if (!NativeMethods.QueryFullProcessImageName(handle, 0, builder, ref length) || length <= 0)
+            {
+                return processId.ToString();
+            }
+
+            var fileName = Path.GetFileNameWithoutExtension(builder.ToString(0, length));
+            return string.IsNullOrWhiteSpace(fileName)
+                ? processId.ToString()
+                : fileName;
+        }
+        finally
+        {
+            NativeMethods.CloseHandle(handle);
         }
     }
 
@@ -365,6 +430,14 @@ internal static class FullscreenApplicationDetector
         public NativeMethods.Rect ForegroundMonitorRect;
         public string ForegroundDescription;
     }
+
+    public readonly record struct TaskbarFullscreenState(
+        bool ShouldPauseNonClockUpdates,
+        string PauseDescription,
+        bool ShouldYieldTopmost,
+        string YieldDescription);
+
+    private readonly record struct ProcessNameCacheEntry(string Name, DateTimeOffset CachedAt);
 
     private struct FullscreenWindowInfo
     {

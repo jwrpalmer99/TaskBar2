@@ -392,12 +392,19 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return false;
         }
 
-        UpdateFullscreenZOrderState();
+        var fullscreenState = FullscreenApplicationDetector.GetTaskbarState(GetScreenRect());
+        UpdateFullscreenZOrderState(fullscreenState.ShouldYieldTopmost, fullscreenState.YieldDescription);
 
-        var shouldPause = FullscreenApplicationDetector.IsFullscreenApplicationActive(out var fullscreenDescription);
+        var shouldPause = fullscreenState.ShouldPauseNonClockUpdates;
+        var fullscreenDescription = fullscreenState.PauseDescription;
         HookProcessingPauseService.ApplyFullscreenPauseState(shouldPause);
         if (shouldPause == _nonClockUpdatesPaused)
         {
+            if (shouldPause)
+            {
+                StopPausedNonClockTimers();
+            }
+
             return _nonClockUpdatesPaused;
         }
 
@@ -408,10 +415,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         _windowTracker.SetNonClockUpdatesPaused(shouldPause);
         if (shouldPause)
         {
-            _pendingFlyoutButton = null;
-            _groupFlyoutTimer.Stop();
-            _trayRefreshTimer.Stop();
-            CloseGroupFlyout();
+            StopPausedNonClockTimers();
             DebugLogger.WriteIfChanged(
                 $"native-fullscreen-pause-{_screen.DeviceName}",
                 $"Native taskbar non-clock updates paused: Screen={_screen.DeviceName} {fullscreenDescription}");
@@ -425,22 +429,55 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             _trayRefreshTimer.Start();
         }
 
+        if (_autoHideEnabled && !_autoHideTimer.IsEnabled)
+        {
+            _autoHideTimer.Start();
+        }
+
         ApplyWindowList(_windowTracker.CurrentWindows, force: true);
         RefreshTray(force: true);
         QueueRender(allowWhilePaused: true);
         return false;
     }
 
-    private void UpdateFullscreenZOrderState()
+    private void StopPausedNonClockTimers()
+    {
+        _pendingFlyoutButton = null;
+        ClearHoverState();
+        ResetHoverPopupCloseDelay();
+        if (_groupFlyoutTimer.IsEnabled)
+        {
+            _groupFlyoutTimer.Stop();
+        }
+
+        if (_hoverPopupPollTimer.IsEnabled)
+        {
+            _hoverPopupPollTimer.Stop();
+        }
+
+        if (_trayRefreshTimer.IsEnabled)
+        {
+            _trayRefreshTimer.Stop();
+        }
+
+        if (_autoHideTimer.IsEnabled)
+        {
+            _autoHideTimer.Stop();
+        }
+
+        if (_groupFlyout is not null || _hoverLabel is not null)
+        {
+            CloseGroupFlyout();
+        }
+    }
+
+    private void UpdateFullscreenZOrderState(bool shouldYieldTopmost, string fullscreenDescription)
     {
         if (_hwnd == IntPtr.Zero)
         {
             return;
         }
 
-        var shouldYieldTopmost = FullscreenApplicationDetector.ShouldTaskbarYieldToForegroundFullscreen(
-            GetScreenRect(),
-            out var fullscreenDescription);
         if (shouldYieldTopmost == _yieldingTopmostForFullscreen)
         {
             return;
@@ -496,6 +533,12 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     {
         if (_disposed || _hwnd == IntPtr.Zero)
         {
+            return;
+        }
+
+        if (_nonClockUpdatesPaused)
+        {
+            _autoHideTimer.Stop();
             return;
         }
 
@@ -560,7 +603,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         }
 
         PositionAutoHideTaskbarWindow();
-        if (!_autoHideTimer.IsEnabled)
+        if (_nonClockUpdatesPaused)
+        {
+            _autoHideTimer.Stop();
+        }
+        else if (!_autoHideTimer.IsEnabled)
         {
             _autoHideTimer.Start();
         }
@@ -568,6 +615,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private bool RevealAutoHiddenTaskbar()
     {
+        if (_nonClockUpdatesPaused)
+        {
+            return false;
+        }
+
         if (!_autoHideEnabled || _autoHideVisible)
         {
             return false;
@@ -1337,7 +1389,8 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private void ScheduleGroupFlyout(NativeTaskbarButton? button)
     {
-        if (!AppSettingsService.Current.ShowTaskbarThumbnailsOnHover)
+        if (_nonClockUpdatesPaused ||
+            !AppSettingsService.Current.ShowTaskbarThumbnailsOnHover)
         {
             _pendingFlyoutButton = null;
             _groupFlyoutTimer.Stop();
@@ -1377,7 +1430,8 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private void ShowPendingGroupFlyout()
     {
         _groupFlyoutTimer.Stop();
-        if (!AppSettingsService.Current.ShowTaskbarThumbnailsOnHover ||
+        if (_nonClockUpdatesPaused ||
+            !AppSettingsService.Current.ShowTaskbarThumbnailsOnHover ||
             _pendingFlyoutButton is not { } button)
         {
             return;
@@ -1553,7 +1607,9 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private void PollHoverPopupTarget()
     {
-        if (_disposed || !AppSettingsService.Current.ShowTaskbarThumbnailsOnHover)
+        if (_disposed ||
+            _nonClockUpdatesPaused ||
+            !AppSettingsService.Current.ShowTaskbarThumbnailsOnHover)
         {
             ClearHoverState();
             CloseGroupFlyout();
@@ -1688,6 +1744,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private void EnsureHoverPopupPollRunning()
     {
+        if (_nonClockUpdatesPaused)
+        {
+            return;
+        }
+
         if (!_hoverPopupPollTimer.IsEnabled)
         {
             _hoverPopupPollTimer.Start();

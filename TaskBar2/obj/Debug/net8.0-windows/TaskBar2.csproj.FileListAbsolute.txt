@@ -163,3 +163,8 @@ C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\TaskBar2.runtimecon
 C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\TaskBar2.dll
 C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\TaskBar2.pdb
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\bin\Debug\net8.0-windows\TaskBar2.exe
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\TaskBar2.exe
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\TaskBar2.deps.json
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\TaskBar2.runtimeconfig.json
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\TaskBar2.dll
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\TaskBar2.pdb

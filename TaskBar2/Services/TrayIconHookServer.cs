@@ -68,6 +68,11 @@ internal sealed class TrayIconHookServer : IDisposable
                     PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
 
                 await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+                if (HookProcessingPauseService.IsPaused)
+                {
+                    continue;
+                }
+
                 await ReadClientAsync(pipe, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -89,6 +94,11 @@ internal sealed class TrayIconHookServer : IDisposable
         using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
         while (!cancellationToken.IsCancellationRequested)
         {
+            if (HookProcessingPauseService.IsPaused)
+            {
+                return;
+            }
+
             var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
             if (line is null)
             {
@@ -98,6 +108,11 @@ internal sealed class TrayIconHookServer : IDisposable
             if (string.IsNullOrWhiteSpace(line))
             {
                 continue;
+            }
+
+            if (HookProcessingPauseService.IsPaused)
+            {
+                return;
             }
 
             ProcessMessage(line);
@@ -117,11 +132,6 @@ internal sealed class TrayIconHookServer : IDisposable
 
             if (string.Equals(messageType, "ExplorerTaskbarSnapshot", StringComparison.OrdinalIgnoreCase))
             {
-                if (HookProcessingPauseService.IsPaused)
-                {
-                    return;
-                }
-
                 ProcessExplorerTaskbarSnapshotMessage(json);
                 return;
             }
