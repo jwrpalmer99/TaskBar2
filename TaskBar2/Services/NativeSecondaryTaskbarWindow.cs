@@ -1997,6 +1997,24 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
                string.Equals(fileName, "explorer.exe", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool IsExplorerGroup(NativeTaskbarGroup group) =>
+        group.Items.Any(IsExplorerItem);
+
+    private static bool IsExplorerItem(TaskbarItem item)
+    {
+        var processName = Path.GetFileNameWithoutExtension(item.ProcessName);
+        var processFileName = string.IsNullOrWhiteSpace(item.ProcessPath)
+            ? ""
+            : Path.GetFileName(item.ProcessPath);
+        var iconFileName = string.IsNullOrWhiteSpace(item.IconPath)
+            ? ""
+            : Path.GetFileName(item.IconPath);
+
+        return string.Equals(processName, "explorer", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(processFileName, "explorer.exe", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(iconFileName, "explorer.exe", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string NormalizePath(string path)
     {
         try
@@ -2013,7 +2031,9 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     {
         foreach (var button in _buttons)
         {
-            var explorerButtonImage = GetExplorerButtonImage(button.Group);
+            var explorerButtonImage = IsExplorerGroup(button.Group)
+                ? null
+                : GetExplorerButtonImage(button.Group);
             var bitmap = explorerButtonImage?.Bitmap;
             if (explorerButtonImage is not null)
             {
@@ -2160,6 +2180,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             : $"pin:{item.GroupKey}";
 
     private static bool ShouldPreferManagedIcon(TaskbarItem item) =>
+        !IsExplorerItem(item) &&
         item.Icon is not null &&
         (PackageAppResolver.IsPackageAppId(item.AppUserModelId) ||
          (!string.IsNullOrWhiteSpace(item.IconPath) &&

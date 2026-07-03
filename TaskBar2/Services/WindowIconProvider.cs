@@ -12,6 +12,9 @@ namespace TaskBar2.Services;
 internal static class WindowIconProvider
 {
     private const int DefaultIconSize = 32;
+    private static readonly string ExplorerExecutablePath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+        "explorer.exe");
 
     public static string GetIconFingerprint(
         IntPtr hwnd,
@@ -19,13 +22,15 @@ internal static class WindowIconProvider
         string? iconPath = null,
         int iconIndex = 0)
     {
-        var iconHandle = GetWindowIconHandle(hwnd);
+        var sourcePath = GetIconSourcePath(hwnd, executablePath, iconPath);
+        var iconHandle = IsExplorerPath(sourcePath)
+            ? IntPtr.Zero
+            : GetWindowIconHandle(hwnd);
         if (iconHandle != IntPtr.Zero)
         {
             return $"hicon:{iconHandle.ToInt64():X}";
         }
 
-        var sourcePath = GetIconSourcePath(hwnd, executablePath, iconPath);
         if (sourcePath is null)
         {
             return "";
@@ -49,8 +54,10 @@ internal static class WindowIconProvider
         int iconIndex = 0,
         int desiredSize = DefaultIconSize)
     {
-        var iconHandle = GetWindowIconHandle(hwnd);
         var sourcePath = GetIconSourcePath(hwnd, executablePath, iconPath);
+        var iconHandle = IsExplorerPath(sourcePath)
+            ? IntPtr.Zero
+            : GetWindowIconHandle(hwnd);
         if (iconHandle != IntPtr.Zero)
         {
             if (!IsIconAtLeastSize(iconHandle, desiredSize) &&
@@ -105,8 +112,10 @@ internal static class WindowIconProvider
         int iconIndex = 0,
         int desiredSize = DefaultIconSize)
     {
-        var iconHandle = GetWindowIconHandle(hwnd);
         var sourcePath = GetIconSourcePath(hwnd, executablePath, iconPath);
+        var iconHandle = IsExplorerPath(sourcePath)
+            ? IntPtr.Zero
+            : GetWindowIconHandle(hwnd);
         if (iconHandle != IntPtr.Zero)
         {
             if (!IsIconAtLeastSize(iconHandle, desiredSize) &&
@@ -146,6 +155,13 @@ internal static class WindowIconProvider
 
     private static string? GetIconSourcePath(IntPtr hwnd, string? executablePath, string? iconPath)
     {
+        executablePath ??= GetExecutablePath(hwnd);
+
+        if (IsExplorerProcess(executablePath, iconPath))
+        {
+            return File.Exists(ExplorerExecutablePath) ? ExplorerExecutablePath : executablePath;
+        }
+
         foreach (var path in new[] { iconPath, executablePath })
         {
             if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
@@ -154,10 +170,30 @@ internal static class WindowIconProvider
             }
         }
 
-        executablePath ??= GetExecutablePath(hwnd);
         return executablePath is not null && File.Exists(executablePath)
             ? executablePath
             : null;
+    }
+
+    private static bool IsExplorerProcess(string? executablePath, string? iconPath) =>
+        IsExplorerPath(executablePath) ||
+        IsExplorerPath(iconPath);
+
+    private static bool IsExplorerPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            return string.Equals(Path.GetFileName(path), "explorer.exe", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 
     private static IntPtr GetWindowIconHandle(IntPtr hwnd)
