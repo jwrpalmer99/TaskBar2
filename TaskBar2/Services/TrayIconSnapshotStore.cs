@@ -1,6 +1,5 @@
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -214,8 +213,10 @@ internal static class TrayIconSnapshotStore
             return true;
         }
 
-        var icon = DecodeIcon(message.IconPngBase64) ?? existing?.Icon;
         var iconFingerprint = ComputeIconFingerprint(message.IconPngBase64) ?? existing?.IconFingerprint ?? "";
+        var icon = string.Equals(existing?.IconFingerprint, iconFingerprint, StringComparison.Ordinal)
+            ? existing?.Icon
+            : DecodeIcon(message.IconPngBase64) ?? existing?.Icon;
 
         if (icon is null)
         {
@@ -413,6 +414,22 @@ internal static class TrayIconSnapshotStore
         {
             Snapshots.Remove(identity);
         }
+
+        if (SequenceByOrderKey.Count <= Snapshots.Count)
+        {
+            return;
+        }
+
+        var activeOrderKeys = Snapshots.Values
+            .Select(snapshot => snapshot.OrderKey)
+            .Where(orderKey => !string.IsNullOrWhiteSpace(orderKey))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var orderKey in SequenceByOrderKey.Keys
+                     .Where(orderKey => !activeOrderKeys.Contains(orderKey))
+                     .ToArray())
+        {
+            SequenceByOrderKey.Remove(orderKey);
+        }
     }
 
     private static ImageSource? DecodeIcon(string? iconPngBase64)
@@ -451,15 +468,16 @@ internal static class TrayIconSnapshotStore
             return null;
         }
 
-        try
+        const ulong offset = 14695981039346656037UL;
+        const ulong prime = 1099511628211UL;
+        var hash = offset;
+        foreach (var character in iconPngBase64)
         {
-            var bytes = Convert.FromBase64String(iconPngBase64);
-            return Convert.ToHexString(SHA256.HashData(bytes));
+            hash ^= character;
+            hash *= prime;
         }
-        catch (FormatException)
-        {
-            return null;
-        }
+
+        return $"b64:{iconPngBase64.Length}:{hash:X16}";
     }
 
     private static void ForwardLeftClick(TrayIconClickTarget target)
@@ -804,8 +822,19 @@ internal static class TrayIconSnapshotStore
     private static string ShortHash(string value) =>
         string.IsNullOrWhiteSpace(value) ? "" : value[..Math.Min(12, value.Length)];
 
-    private static string ComputeStringFingerprint(string value) =>
-        Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value)))[..12];
+    private static string ComputeStringFingerprint(string value)
+    {
+        const ulong offset = 14695981039346656037UL;
+        const ulong prime = 1099511628211UL;
+        var hash = offset;
+        foreach (var character in value)
+        {
+            hash ^= character;
+            hash *= prime;
+        }
+
+        return hash.ToString("X16")[..12];
+    }
 
     private static string NormalizeToolTip(string toolTip) =>
         string.Join(

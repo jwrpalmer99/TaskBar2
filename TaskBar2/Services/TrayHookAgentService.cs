@@ -56,22 +56,36 @@ internal sealed class TrayHookAgentService : IDisposable
             var runElevated = AppSettingsService.Current.EnableElevatedTrayIconHookAgent;
             var showAllTrayIcons = AppSettingsService.Current.ShowAllTrayIcons;
             var splitElevatedTrayAgent = enableTrayIconHook && runElevated;
-            var startMainAgent = enableTrayIconHook;
+            var startMainAgent = enableTrayIconHook || (!splitElevatedTrayAgent && enableExplorerTaskbarHook);
             var startStandardAgent = splitElevatedTrayAgent;
-            var startExplorerAgent = enableExplorerTaskbarHook;
+            var startExplorerAgent = false;
             var mainTargetMode = splitElevatedTrayAgent ? "ElevatedOnly" : "StandardOnly";
             var mainElevated = splitElevatedTrayAgent;
             var mainEnableTray = enableTrayIconHook;
-            var mainEnableExplorer = false;
+            var mainEnableExplorer = enableExplorerTaskbarHook && !mainElevated;
+            var mainShowAllTrayIcons = mainEnableTray && showAllTrayIcons;
             var standardEnableTray = enableTrayIconHook;
-            var standardEnableExplorer = false;
+            var standardEnableExplorer = enableExplorerTaskbarHook;
+            var standardShowAllTrayIcons = standardEnableTray && showAllTrayIcons;
 
             var needsRestart =
                 (startMainAgent
-                    ? _agent.RequiresRestart(mainTargetMode, mainElevated, showAllTrayIcons, mainEnableTray, mainEnableExplorer)
+                    ? _agent.RequiresRestart(
+                        mainTargetMode,
+                        mainElevated,
+                        mainShowAllTrayIcons,
+                        mainEnableTray,
+                        mainEnableExplorer,
+                        mainEnableExplorer && enableExplorerTaskbarButtonImageCapture)
                     : _agent.IsRunning) ||
                 (startStandardAgent
-                    ? _standardAgent.RequiresRestart("StandardOnly", elevated: false, showAllTrayIcons, standardEnableTray, standardEnableExplorer)
+                    ? _standardAgent.RequiresRestart(
+                        "StandardOnly",
+                        elevated: false,
+                        standardShowAllTrayIcons,
+                        standardEnableTray,
+                        standardEnableExplorer,
+                        standardEnableExplorer && enableExplorerTaskbarButtonImageCapture)
                     : _standardAgent.IsRunning) ||
                 (startExplorerAgent
                     ? _explorerAgent.RequiresRestart("StandardOnly", elevated: false, showAllTrayIcons: false, enableTrayIconHook: false, enableExplorerTaskbarHook: true, enableExplorerTaskbarButtonImageCapture)
@@ -91,9 +105,10 @@ internal sealed class TrayHookAgentService : IDisposable
                 _agent.Start(
                     mainTargetMode,
                     mainElevated,
-                    showAllTrayIcons,
+                    mainShowAllTrayIcons,
                     mainEnableTray,
-                    mainEnableExplorer);
+                    mainEnableExplorer,
+                    mainEnableExplorer && enableExplorerTaskbarButtonImageCapture);
             }
 
             if (startStandardAgent)
@@ -101,9 +116,10 @@ internal sealed class TrayHookAgentService : IDisposable
                 _standardAgent.Start(
                     "StandardOnly",
                     elevated: false,
-                    showAllTrayIcons,
+                    standardShowAllTrayIcons,
                     standardEnableTray,
-                    standardEnableExplorer);
+                    standardEnableExplorer,
+                    standardEnableExplorer && enableExplorerTaskbarButtonImageCapture);
             }
 
             if (startExplorerAgent)

@@ -134,7 +134,16 @@ internal static class TaskbarStateSnapshotStore
             return "";
         }
 
-        return $"png:{iconPngBase64.Length}:{iconPngBase64.GetHashCode(StringComparison.Ordinal):X8}";
+        const ulong offset = 14695981039346656037UL;
+        const ulong prime = 1099511628211UL;
+        var hash = offset;
+        foreach (var character in iconPngBase64)
+        {
+            hash ^= character;
+            hash *= prime;
+        }
+
+        return $"b64:{iconPngBase64.Length}:{hash:X16}";
     }
 
     private static ImageSource? DecodeIcon(string? iconPngBase64)

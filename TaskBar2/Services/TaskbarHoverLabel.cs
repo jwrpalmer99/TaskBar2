@@ -55,7 +55,7 @@ internal sealed class TaskbarHoverLabel : ToolStripDropDown
 
         _autoCloseTimer = new FormsTimer
         {
-            Interval = 75
+            Interval = 125
         };
         _autoCloseTimer.Tick += (_, _) => CloseIfPointerLeft();
     }

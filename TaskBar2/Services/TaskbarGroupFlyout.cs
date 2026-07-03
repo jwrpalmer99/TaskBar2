@@ -55,7 +55,7 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
 
         _autoCloseTimer = new FormsTimer
         {
-            Interval = 75
+            Interval = 125
         };
         _autoCloseTimer.Tick += (_, _) => CloseIfPointerLeft();
     }
@@ -143,6 +143,7 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
         private IntPtr _thumbnailDestination;
         private int _hoverIndex = -1;
         private int _hoverCloseIndex = -1;
+        private bool _layoutValid;
 
         public PreviewControl(IReadOnlyList<TaskbarItem> items, Action<TaskbarItem> activate, Action<TaskbarItem> close)
         {
@@ -166,7 +167,7 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
 
             _thumbnailRefreshTimer = new FormsTimer
             {
-                Interval = 500
+                Interval = 2000
             };
             _thumbnailRefreshTimer.Tick += (_, _) => UpdateThumbnails();
         }
@@ -187,6 +188,7 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
             ClearThumbnails();
             _thumbnailDestination = destination;
             RegisterThumbnails();
+            EnsureLayout();
             UpdateThumbnails();
             _thumbnailRefreshTimer.Start();
         }
@@ -214,21 +216,19 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
         {
             base.OnPaint(e);
             e.Graphics.Clear(Color.FromArgb(31, 31, 31));
-            LayoutItems();
+            EnsureLayout();
 
             for (var index = 0; index < _items.Count; index++)
             {
                 var item = _items[index];
                 DrawItem(e.Graphics, item, index == _hoverIndex, index == _hoverCloseIndex);
             }
-
-            UpdateThumbnails();
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
-            LayoutItems();
+            EnsureLayout();
             var hoverIndex = _items.FindIndex(item => item.Bounds.Contains(e.Location));
             var hoverCloseIndex = hoverIndex >= 0 && _items[hoverIndex].CloseButtonBounds.Contains(e.Location)
                 ? hoverIndex
@@ -264,7 +264,7 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
                 return;
             }
 
-            LayoutItems();
+            EnsureLayout();
             var item = _items.FirstOrDefault(preview => preview.Bounds.Contains(e.Location));
             if (item is null)
             {
@@ -324,7 +324,7 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
             }
 
             UpdateControlSize();
-            LayoutItems();
+            EnsureLayout();
             PreviewItemsChanged?.Invoke(this, EventArgs.Empty);
             Invalidate();
             UpdateThumbnails();
@@ -337,6 +337,17 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
             Size = new Size(
                 PaddingSize * 2 + columns * ItemWidth + (columns - 1) * Gap,
                 PaddingSize * 2 + rows * ItemHeight + (rows - 1) * Gap);
+            _layoutValid = false;
+        }
+
+        private void EnsureLayout()
+        {
+            if (_layoutValid)
+            {
+                return;
+            }
+
+            LayoutItems();
         }
 
         private void LayoutItems()
@@ -366,6 +377,8 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
                     bounds.Width - 16,
                     PreviewHeight);
             }
+
+            _layoutValid = true;
         }
 
         private void RegisterThumbnails()
@@ -401,7 +414,7 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
                 return;
             }
 
-            LayoutItems();
+            EnsureLayout();
             foreach (var item in _items)
             {
                 if (item.Thumbnail == IntPtr.Zero)

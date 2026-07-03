@@ -4,7 +4,6 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Microsoft.Win32;
@@ -30,7 +29,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private static readonly TimeSpan PausedFullscreenPollInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan AutoHidePollInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan AutoHideHideDelay = TimeSpan.FromMilliseconds(450);
-    private static readonly TimeSpan HoverPopupPollInterval = TimeSpan.FromMilliseconds(75);
+    private static readonly TimeSpan HoverPopupPollInterval = TimeSpan.FromMilliseconds(125);
     private static readonly TimeSpan HoverPopupCloseDelay = TimeSpan.FromMilliseconds(350);
     private static readonly TimeSpan ClosedPreviewRefreshDelay = TimeSpan.FromMilliseconds(500);
     private const int TbpfNoProgress = 0;
@@ -826,16 +825,17 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             latestItems = _trayIconProvider.GetIcons();
         }
 
+        var previousSignature = _trayVisualSignature;
         var signature = BuildTrayVisualSignature(latestItems);
-        if (signature == _trayVisualSignature)
-        {
-            return;
-        }
-
         _trayVisualSignature = signature;
         _trayItems = latestItems;
         RebuildTrayProcessLookups();
         RemoveUnusedTrayImages(_trayItems.Select(GetTrayKey).ToHashSet(StringComparer.Ordinal));
+        if (signature == previousSignature)
+        {
+            return;
+        }
+
         QueueRender();
     }
 
@@ -2437,8 +2437,25 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         }
     }
 
-    private static string GetExplorerButtonImageCacheKey(string groupKey) =>
-        Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("transparent-v2:" + groupKey)));
+    private static string GetExplorerButtonImageCacheKey(string groupKey)
+    {
+        const ulong offset = 14695981039346656037UL;
+        const ulong prime = 1099511628211UL;
+        var hash = offset;
+        foreach (var character in "transparent-v2:")
+        {
+            hash ^= character;
+            hash *= prime;
+        }
+
+        foreach (var character in groupKey)
+        {
+            hash ^= character;
+            hash *= prime;
+        }
+
+        return $"v2-{groupKey.Length:X}-{hash:X16}";
+    }
 
     private static Bitmap CreateSquareBitmap(Image image)
     {
@@ -2695,7 +2712,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private static string BuildTrayVisualSignature(IReadOnlyList<TrayIconItem> items)
     {
         return string.Join("|", items.Select(item =>
-            $"{GetTrayKey(item)}:{item.ToolTip}:{item.SourceProcessName}:{item.SourceProcessPath}:{RuntimeHelpers.GetHashCode(item.Icon)}"));
+            $"{GetTrayKey(item)}:{RuntimeHelpers.GetHashCode(item.Icon)}"));
     }
 
     private static IReadOnlyList<NativeTaskbarGroup> BuildWindowGroups(IReadOnlyList<TaskbarItem> items)
@@ -2709,7 +2726,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private static string BuildWindowVisualSignature(IReadOnlyList<NativeTaskbarGroup> groups)
     {
         return string.Join("|", groups.Select(group =>
-            $"{group.Key}:{string.Join(",", group.Items.Select(item => $"{item.Hwnd.ToInt64():X}:{item.Title}:{item.IsActive}:{item.IsMinimized}:{item.MonitorDeviceName}:{item.IconFingerprint}:{item.IconIndex}"))}"));
+            $"{group.Key}:{string.Join(",", group.Items.Select(item => $"{item.Hwnd.ToInt64():X}:{item.IsActive}:{item.IsMinimized}:{item.MonitorDeviceName}:{item.IconFingerprint}:{item.IconIndex}"))}"));
     }
 
     private int GetPauseIndicatorWidth()

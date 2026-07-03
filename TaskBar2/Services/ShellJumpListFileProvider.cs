@@ -37,9 +37,18 @@ internal static class ShellJumpListFileProvider
         0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46
     ];
     private static readonly byte[] CategoryFooterSignature = [0xAB, 0xFB, 0xBF, 0xBA];
+    private const int MaxCachedSectionSets = 64;
+    private static readonly object CacheSync = new();
+    private static readonly Dictionary<string, CachedDestinationSections> SectionCache = new(StringComparer.OrdinalIgnoreCase);
 
     public static IReadOnlyList<JumpListMenuSection> GetCustomDestinationSections(IReadOnlyList<TaskbarItem> items)
     {
+        var fileSet = GetDestinationFileSet(CustomDestinationsDirectory, "*.customDestinations-ms");
+        if (fileSet.Files.Count == 0)
+        {
+            return Array.Empty<JumpListMenuSection>();
+        }
+
         foreach (var executablePath in GetExecutableCandidates(items))
         {
             if (ShouldSkipCustomDestinations(executablePath))
@@ -47,39 +56,24 @@ internal static class ShellJumpListFileProvider
                 continue;
             }
 
-            var entries = ReadCustomDestinationEntries(executablePath)
-                .ToArray();
-
-            if (entries.Length == 0)
+            var cacheKey = $"custom:{NormalizePath(executablePath)}";
+            if (TryGetCachedSections(cacheKey, fileSet.Stamp, out var cachedSections))
             {
-                continue;
-            }
-
-            var sections = new List<JumpListMenuSection>();
-            foreach (var group in entries.GroupBy(entry => entry.SectionTitle, StringComparer.OrdinalIgnoreCase))
-            {
-                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                var menuEntries = group
-                    .Select(CreateMenuEntry)
-                    .Where(entry => entry is not null && seen.Add(entry.Key))
-                    .Cast<JumpListMenuEntry>()
-                    .Take(MaxEntriesPerSection)
-                    .ToArray();
-                if (menuEntries.Length > 0)
+                if (cachedSections.Count > 0)
                 {
-                    sections.Add(new JumpListMenuSection(group.Key, menuEntries));
+                    return cachedSections;
                 }
-            }
 
-            if (sections.Count == 0)
-            {
                 continue;
             }
 
-            DebugLogger.WriteIfChanged(
-                $"jump-list-custom-loaded-{executablePath}",
-                $"Jump List custom destinations loaded: Exe={executablePath} Sections={sections.Count} Count={entries.Length} Items={string.Join(" | ", entries.Select(entry => $"{entry.SectionTitle}:{entry.Title}"))}");
-            return sections;
+            var sections = BuildCustomDestinationSections(executablePath, fileSet.Files);
+            StoreCachedSections(cacheKey, fileSet.Stamp, sections);
+
+            if (sections.Count > 0)
+            {
+                return sections;
+            }
         }
 
         return Array.Empty<JumpListMenuSection>();
@@ -93,70 +87,127 @@ internal static class ShellJumpListFileProvider
 
     public static IReadOnlyList<JumpListMenuSection> GetAutomaticDestinationSections(IReadOnlyList<TaskbarItem> items)
     {
+        var fileSet = GetDestinationFileSet(AutomaticDestinationsDirectory, "*.automaticDestinations-ms");
+        if (fileSet.Files.Count == 0)
+        {
+            return Array.Empty<JumpListMenuSection>();
+        }
+
         foreach (var executablePath in GetExecutableCandidates(items))
         {
-            var entries = ReadAutomaticDestinationEntries(executablePath)
-                .OrderByDescending(entry => entry.IsPinned)
-                .ThenBy(entry => entry.Order)
-                .ToArray();
-            if (entries.Length == 0)
+            var cacheKey = $"automatic:{NormalizePath(executablePath)}";
+            if (TryGetCachedSections(cacheKey, fileSet.Stamp, out var cachedSections))
             {
+                if (cachedSections.Count > 0)
+                {
+                    return cachedSections;
+                }
+
                 continue;
             }
 
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var sections = new List<JumpListMenuSection>();
-            var pinned = entries
-                .Where(entry => entry.IsPinned)
-                .Select(CreateMenuEntry)
-                .Where(entry => entry is not null && seen.Add(entry.Key))
-                .Cast<JumpListMenuEntry>()
-                .Take(MaxEntriesPerSection)
-                .ToArray();
-            if (pinned.Length > 0)
-            {
-                sections.Add(new JumpListMenuSection("Pinned", pinned));
-            }
+            var sections = BuildAutomaticDestinationSections(executablePath, fileSet.Files);
+            StoreCachedSections(cacheKey, fileSet.Stamp, sections);
 
-            var recent = entries
-                .Where(entry => !entry.IsPinned)
-                .Select(CreateMenuEntry)
-                .Where(entry => entry is not null && seen.Add(entry.Key))
-                .Cast<JumpListMenuEntry>()
-                .Take(MaxEntriesPerSection)
-                .ToArray();
-            if (recent.Length > 0)
+            if (sections.Count > 0)
             {
-                sections.Add(new JumpListMenuSection("Recent", recent));
+                return sections;
             }
-
-            if (sections.Count == 0)
-            {
-                continue;
-            }
-
-            DebugLogger.WriteIfChanged(
-                $"jump-list-automatic-file-loaded-{executablePath}",
-                $"Jump List automatic destinations loaded from files: Exe={executablePath} Sections={sections.Count} Count={entries.Length}");
-            return sections;
         }
 
         return Array.Empty<JumpListMenuSection>();
     }
 
-    private static IEnumerable<ShellDestinationEntry> ReadCustomDestinationEntries(string executablePath)
+    private static IReadOnlyList<JumpListMenuSection> BuildCustomDestinationSections(
+        string executablePath,
+        IReadOnlyList<string> filePaths)
     {
-        if (!Directory.Exists(CustomDestinationsDirectory))
+        var entries = ReadCustomDestinationEntries(executablePath, filePaths)
+            .ToArray();
+
+        if (entries.Length == 0)
         {
-            yield break;
+            return Array.Empty<JumpListMenuSection>();
         }
 
-        foreach (var filePath in EnumerateFiles(CustomDestinationsDirectory, "*.customDestinations-ms"))
+        var sections = new List<JumpListMenuSection>();
+        foreach (var group in entries.GroupBy(entry => entry.SectionTitle, StringComparer.OrdinalIgnoreCase))
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var menuEntries = group
+                .Select(CreateMenuEntry)
+                .Where(entry => entry is not null && seen.Add(entry.Key))
+                .Cast<JumpListMenuEntry>()
+                .Take(MaxEntriesPerSection)
+                .ToArray();
+            if (menuEntries.Length > 0)
+            {
+                sections.Add(new JumpListMenuSection(group.Key, menuEntries));
+            }
+        }
+
+        DebugLogger.WriteIfChanged(
+            $"jump-list-custom-loaded-{executablePath}",
+            $"Jump List custom destinations loaded: Exe={executablePath} Sections={sections.Count} Count={entries.Length} Items={string.Join(" | ", entries.Select(entry => $"{entry.SectionTitle}:{entry.Title}"))}");
+        return sections;
+    }
+
+    private static IReadOnlyList<JumpListMenuSection> BuildAutomaticDestinationSections(
+        string executablePath,
+        IReadOnlyList<string> filePaths)
+    {
+        var entries = ReadAutomaticDestinationEntries(executablePath, filePaths)
+            .OrderByDescending(entry => entry.IsPinned)
+            .ThenBy(entry => entry.Order)
+            .ToArray();
+        if (entries.Length == 0)
+        {
+            return Array.Empty<JumpListMenuSection>();
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var sections = new List<JumpListMenuSection>();
+        var pinned = entries
+            .Where(entry => entry.IsPinned)
+            .Select(CreateMenuEntry)
+            .Where(entry => entry is not null && seen.Add(entry.Key))
+            .Cast<JumpListMenuEntry>()
+            .Take(MaxEntriesPerSection)
+            .ToArray();
+        if (pinned.Length > 0)
+        {
+            sections.Add(new JumpListMenuSection("Pinned", pinned));
+        }
+
+        var recent = entries
+            .Where(entry => !entry.IsPinned)
+            .Select(CreateMenuEntry)
+            .Where(entry => entry is not null && seen.Add(entry.Key))
+            .Cast<JumpListMenuEntry>()
+            .Take(MaxEntriesPerSection)
+            .ToArray();
+        if (recent.Length > 0)
+        {
+            sections.Add(new JumpListMenuSection("Recent", recent));
+        }
+
+        DebugLogger.WriteIfChanged(
+            $"jump-list-automatic-file-loaded-{executablePath}",
+            $"Jump List automatic destinations loaded from files: Exe={executablePath} Sections={sections.Count} Count={entries.Length}");
+        return sections;
+    }
+
+    private static IEnumerable<ShellDestinationEntry> ReadCustomDestinationEntries(
+        string executablePath,
+        IReadOnlyList<string> filePaths)
+    {
+        var executableHint = CreateExecutableHint(executablePath);
+        foreach (var filePath in filePaths)
         {
             ShellDestinationEntry[] entries;
             try
             {
-                entries = ParseCustomDestinationsFile(filePath, executablePath).ToArray();
+                entries = ParseCustomDestinationsFile(filePath, executablePath, executableHint).ToArray();
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or COMException or ArgumentException)
             {
@@ -180,7 +231,10 @@ internal static class ShellJumpListFileProvider
         }
     }
 
-    private static IEnumerable<ShellDestinationEntry> ParseCustomDestinationsFile(string filePath, string executablePath)
+    private static IEnumerable<ShellDestinationEntry> ParseCustomDestinationsFile(
+        string filePath,
+        string executablePath,
+        ExecutableHint executableHint)
     {
         var data = ReadFileWithSharing(filePath);
         var position = 0;
@@ -215,6 +269,12 @@ internal static class ShellJumpListFileProvider
             }
 
             var linkBytes = data[linkStart..end];
+            if (!ContainsExecutableHint(linkBytes, executableHint))
+            {
+                position = Math.Max(linkStart + 1, end);
+                continue;
+            }
+
             if (TryParseShellLinkBytes(linkBytes, out var link) &&
                 PathsRoughlyMatch(link.TargetPath, executablePath))
             {
@@ -240,19 +300,17 @@ internal static class ShellJumpListFileProvider
         }
     }
 
-    private static IEnumerable<ShellDestinationEntry> ReadAutomaticDestinationEntries(string executablePath)
+    private static IEnumerable<ShellDestinationEntry> ReadAutomaticDestinationEntries(
+        string executablePath,
+        IReadOnlyList<string> filePaths)
     {
-        if (!Directory.Exists(AutomaticDestinationsDirectory))
-        {
-            yield break;
-        }
-
-        foreach (var filePath in EnumerateFiles(AutomaticDestinationsDirectory, "*.automaticDestinations-ms"))
+        var executableHint = CreateExecutableHint(executablePath);
+        foreach (var filePath in filePaths)
         {
             ShellDestinationEntry[] entries;
             try
             {
-                entries = ParseAutomaticDestinationsFile(filePath, executablePath).ToArray();
+                entries = ParseAutomaticDestinationsFile(filePath, executablePath, executableHint).ToArray();
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or COMException or ArgumentException or OpenMcdf.FileFormatException)
             {
@@ -276,7 +334,10 @@ internal static class ShellJumpListFileProvider
         }
     }
 
-    private static IEnumerable<ShellDestinationEntry> ParseAutomaticDestinationsFile(string filePath, string executablePath)
+    private static IEnumerable<ShellDestinationEntry> ParseAutomaticDestinationsFile(
+        string filePath,
+        string executablePath,
+        ExecutableHint executableHint)
     {
         var streams = ReadCompoundStreams(filePath);
         if (!streams.TryGetValue("DestList", out var destListBytes))
@@ -289,6 +350,7 @@ internal static class ShellJumpListFileProvider
         {
             if (stream.Key.Equals("DestList", StringComparison.OrdinalIgnoreCase) ||
                 !uint.TryParse(stream.Key, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var entryNumber) ||
+                !ContainsExecutableHint(stream.Value, executableHint) ||
                 !TryParseShellLinkBytes(stream.Value, out var link) ||
                 !PathsRoughlyMatch(link.TargetPath, executablePath))
             {
@@ -504,24 +566,6 @@ internal static class ShellJumpListFileProvider
         }
     }
 
-    private static IReadOnlyList<string> EnumerateFiles(string directory, string pattern)
-    {
-        try
-        {
-            return Directory
-                .EnumerateFiles(directory, pattern, SearchOption.TopDirectoryOnly)
-                .OrderByDescending(File.GetLastWriteTimeUtc)
-                .ToArray();
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            DebugLogger.WriteIfChanged(
-                $"jump-list-directory-error-{directory}",
-                $"Jump List directory scan failed: Directory={directory} Pattern={pattern} {exception.GetType().Name}: {exception.Message}");
-            return Array.Empty<string>();
-        }
-    }
-
     private static bool TryParseShellLinkBytes(byte[] linkBytes, out ShellLinkInfo link)
     {
         link = default!;
@@ -555,9 +599,12 @@ internal static class ShellJumpListFileProvider
             var arguments = ReadString(builder => shellLink.GetArguments(builder, builder.Capacity));
             var workingDirectory = NormalizePath(ReadString(builder => shellLink.GetWorkingDirectory(builder, builder.Capacity)));
             var description = ReadString(builder => shellLink.GetDescription(builder, builder.Capacity));
-            var title = FirstNonEmpty(
-                ReadPropertyTitle(shellLinkObject),
-                ReadEmbeddedDisplayTitle(linkBytes, targetPath, arguments));
+            var title = ReadPropertyTitle(shellLinkObject);
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                title = ReadEmbeddedDisplayTitle(linkBytes, targetPath, arguments);
+            }
+
             var iconPath = ReadIconLocation(shellLink, out var iconIndex);
 
             link = new ShellLinkInfo(targetPath, arguments, workingDirectory, title, description, iconPath, iconIndex);
@@ -756,9 +803,6 @@ internal static class ShellJumpListFileProvider
         return string.IsNullOrWhiteSpace(fileName) ? link.TargetPath : fileName;
     }
 
-    private static string FirstNonEmpty(params string[] values) =>
-        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "";
-
     private static bool PathsRoughlyMatch(string linkTarget, string executablePath)
     {
         if (string.IsNullOrWhiteSpace(linkTarget) || string.IsNullOrWhiteSpace(executablePath))
@@ -803,6 +847,228 @@ internal static class ShellJumpListFileProvider
         using var memory = new MemoryStream();
         stream.CopyTo(memory);
         return memory.ToArray();
+    }
+
+    private static DestinationFileSet GetDestinationFileSet(string directory, string pattern)
+    {
+        if (!Directory.Exists(directory))
+        {
+            return new DestinationFileSet("missing", Array.Empty<string>());
+        }
+
+        try
+        {
+            var files = Directory
+                .EnumerateFiles(directory, pattern, SearchOption.TopDirectoryOnly)
+                .Select(path => new FileInfo(path))
+                .Where(file => file.Exists)
+                .OrderByDescending(file => file.LastWriteTimeUtc)
+                .ToArray();
+
+            ulong hash = 14695981039346656037UL;
+            foreach (var file in files)
+            {
+                AddHash(ref hash, file.Name);
+                AddHash(ref hash, file.Length);
+                AddHash(ref hash, file.LastWriteTimeUtc.Ticks);
+            }
+
+            return new DestinationFileSet(
+                $"{files.Length}:{hash:X16}",
+                files.Select(file => file.FullName).ToArray());
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            DebugLogger.WriteIfChanged(
+                $"jump-list-directory-error-{directory}",
+                $"Jump List directory scan failed: Directory={directory} Pattern={pattern} {exception.GetType().Name}: {exception.Message}");
+            return new DestinationFileSet("error", Array.Empty<string>());
+        }
+    }
+
+    private static bool TryGetCachedSections(string cacheKey, string stamp, out IReadOnlyList<JumpListMenuSection> sections)
+    {
+        lock (CacheSync)
+        {
+            if (SectionCache.TryGetValue(cacheKey, out var cached) &&
+                string.Equals(cached.Stamp, stamp, StringComparison.Ordinal))
+            {
+                sections = cached.Sections;
+                return true;
+            }
+        }
+
+        sections = Array.Empty<JumpListMenuSection>();
+        return false;
+    }
+
+    private static void StoreCachedSections(
+        string cacheKey,
+        string stamp,
+        IReadOnlyList<JumpListMenuSection> sections)
+    {
+        lock (CacheSync)
+        {
+            if (SectionCache.Count >= MaxCachedSectionSets && !SectionCache.ContainsKey(cacheKey))
+            {
+                SectionCache.Clear();
+            }
+
+            SectionCache[cacheKey] = new CachedDestinationSections(stamp, sections);
+        }
+    }
+
+    private static ExecutableHint CreateExecutableHint(string executablePath)
+    {
+        var fileName = Path.GetFileName(executablePath);
+        var baseName = Path.GetFileNameWithoutExtension(executablePath);
+        return new ExecutableHint(fileName ?? "", baseName ?? "");
+    }
+
+    private static bool ContainsExecutableHint(byte[] data, ExecutableHint hint)
+    {
+        if (string.IsNullOrWhiteSpace(hint.FileName))
+        {
+            return true;
+        }
+
+        if (!IsAscii(hint.FileName) || !IsAscii(hint.BaseName))
+        {
+            return true;
+        }
+
+        return ContainsAsciiIgnoreCase(data, hint.FileName) ||
+               ContainsUtf16AsciiIgnoreCase(data, hint.FileName) ||
+               (!string.IsNullOrWhiteSpace(hint.BaseName) &&
+                (ContainsAsciiIgnoreCase(data, hint.BaseName) ||
+                 ContainsUtf16AsciiIgnoreCase(data, hint.BaseName)));
+    }
+
+    private static bool ContainsAsciiIgnoreCase(ReadOnlySpan<byte> data, string text)
+    {
+        if (text.Length == 0 || data.Length < text.Length)
+        {
+            return false;
+        }
+
+        for (var index = 0; index <= data.Length - text.Length; index++)
+        {
+            var matched = true;
+            for (var characterIndex = 0; characterIndex < text.Length; characterIndex++)
+            {
+                if (!EqualsAsciiIgnoreCase(data[index + characterIndex], text[characterIndex]))
+                {
+                    matched = false;
+                    break;
+                }
+            }
+
+            if (matched)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsUtf16AsciiIgnoreCase(ReadOnlySpan<byte> data, string text)
+    {
+        var byteLength = text.Length * 2;
+        if (text.Length == 0 || data.Length < byteLength)
+        {
+            return false;
+        }
+
+        for (var index = 0; index <= data.Length - byteLength; index += 2)
+        {
+            var matched = true;
+            for (var characterIndex = 0; characterIndex < text.Length; characterIndex++)
+            {
+                var byteIndex = index + characterIndex * 2;
+                if (data[byteIndex + 1] != 0 ||
+                    !EqualsAsciiIgnoreCase(data[byteIndex], text[characterIndex]))
+                {
+                    matched = false;
+                    break;
+                }
+            }
+
+            if (matched)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool EqualsAsciiIgnoreCase(byte value, char expected)
+    {
+        if (expected > 127)
+        {
+            return false;
+        }
+
+        var expectedByte = (byte)expected;
+        if (value >= (byte)'A' && value <= (byte)'Z')
+        {
+            value = (byte)(value + 32);
+        }
+
+        if (expectedByte >= (byte)'A' && expectedByte <= (byte)'Z')
+        {
+            expectedByte = (byte)(expectedByte + 32);
+        }
+
+        return value == expectedByte;
+    }
+
+    private static bool IsAscii(string value)
+    {
+        foreach (var character in value)
+        {
+            if (character > 127)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void AddHash(ref ulong hash, string value)
+    {
+        foreach (var character in value)
+        {
+            AddHash(ref hash, character);
+        }
+    }
+
+    private static void AddHash(ref ulong hash, long value)
+    {
+        unchecked
+        {
+            for (var shift = 0; shift < 64; shift += 8)
+            {
+                AddHash(ref hash, (byte)(value >> shift));
+            }
+        }
+    }
+
+    private static void AddHash(ref ulong hash, char value)
+    {
+        AddHash(ref hash, (byte)value);
+        AddHash(ref hash, (byte)(value >> 8));
+    }
+
+    private static void AddHash(ref ulong hash, byte value)
+    {
+        unchecked
+        {
+            hash ^= value;
+            hash *= 1099511628211UL;
+        }
     }
 
     private static void Launch(string path, string arguments, string workingDirectory)
@@ -941,4 +1207,10 @@ internal static class ShellJumpListFileProvider
         int Order);
 
     private sealed record DestListEntry(bool IsPinned, int Order);
+
+    private sealed record CachedDestinationSections(string Stamp, IReadOnlyList<JumpListMenuSection> Sections);
+
+    private sealed record DestinationFileSet(string Stamp, IReadOnlyList<string> Files);
+
+    private sealed record ExecutableHint(string FileName, string BaseName);
 }

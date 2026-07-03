@@ -12,7 +12,7 @@ internal sealed class TrayIconHookServer : IDisposable
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
-        WriteIndented = true
+        WriteIndented = false
     };
 
     private readonly CancellationTokenSource _cancellationTokenSource = new();
@@ -147,10 +147,34 @@ internal sealed class TrayIconHookServer : IDisposable
 
     private static string GetMessageType(string json)
     {
-        using var document = JsonDocument.Parse(json);
-        return document.RootElement.TryGetProperty("messageType", out var messageType)
-            ? messageType.GetString() ?? ""
-            : "";
+        const string propertyName = "\"messageType\"";
+        var propertyIndex = json.IndexOf(propertyName, StringComparison.OrdinalIgnoreCase);
+        if (propertyIndex < 0)
+        {
+            return "";
+        }
+
+        var colonIndex = json.IndexOf(':', propertyIndex + propertyName.Length);
+        if (colonIndex < 0)
+        {
+            return "";
+        }
+
+        var valueStart = json.IndexOf('"', colonIndex + 1);
+        if (valueStart < 0)
+        {
+            return "";
+        }
+
+        for (var valueEnd = valueStart + 1; valueEnd < json.Length; valueEnd++)
+        {
+            if (json[valueEnd] == '"' && json[valueEnd - 1] != '\\')
+            {
+                return json.Substring(valueStart + 1, valueEnd - valueStart - 1);
+            }
+        }
+
+        return "";
     }
 
     private static void ProcessTaskbarStateMessage(string json)
@@ -192,6 +216,9 @@ internal sealed class TrayIconHookServer : IDisposable
 
     private static void LogMissingSourceMetadataShape(string json, TrayIconHookMessage message)
     {
+#if !DEBUG
+        return;
+#else
         if (message.SourceProcessId != 0 ||
             !string.IsNullOrWhiteSpace(message.SourceProcessName) ||
             !string.IsNullOrWhiteSpace(message.SourceProcessPath))
@@ -199,28 +226,21 @@ internal sealed class TrayIconHookServer : IDisposable
             return;
         }
 
-        try
-        {
-            using var document = JsonDocument.Parse(json);
-            var root = document.RootElement;
-            var hasSourceProcessId = root.TryGetProperty("sourceProcessId", out var sourceProcessId);
-            var hasSourceProcessName = root.TryGetProperty("sourceProcessName", out var sourceProcessName);
-            var hasSourceProcessPath = root.TryGetProperty("sourceProcessPath", out var sourceProcessPath);
-            var key = string.IsNullOrWhiteSpace(message.Guid)
-                ? $"hwnd:{message.OwnerHwnd:X}:{message.IconId}"
-                : $"guid:{message.Guid}";
+        var hasSourceProcessId = json.Contains("\"sourceProcessId\"", StringComparison.OrdinalIgnoreCase);
+        var hasSourceProcessName = json.Contains("\"sourceProcessName\"", StringComparison.OrdinalIgnoreCase);
+        var hasSourceProcessPath = json.Contains("\"sourceProcessPath\"", StringComparison.OrdinalIgnoreCase);
+        var key = string.IsNullOrWhiteSpace(message.Guid)
+            ? $"hwnd:{message.OwnerHwnd:X}:{message.IconId}"
+            : $"guid:{message.Guid}";
 
-            DebugLogger.WriteIfChanged(
-                $"tray-hook-missing-source-{key}",
-                "Tray hook message missing source metadata: " +
-                $"Owner=0x{message.OwnerHwnd:X} IconId={message.IconId} Guid={message.Guid} " +
-                $"HasSourceProcessId={hasSourceProcessId} RawSourceProcessId={(hasSourceProcessId ? sourceProcessId.ToString() : "")} " +
-                $"HasSourceProcessName={hasSourceProcessName} RawSourceProcessName={(hasSourceProcessName ? sourceProcessName.ToString() : "")} " +
-                $"HasSourceProcessPath={hasSourceProcessPath} RawSourceProcessPath={(hasSourceProcessPath ? sourceProcessPath.ToString() : "")}");
-        }
-        catch (JsonException)
-        {
-        }
+        DebugLogger.WriteIfChanged(
+            $"tray-hook-missing-source-{key}",
+            "Tray hook message missing source metadata: " +
+            $"Owner=0x{message.OwnerHwnd:X} IconId={message.IconId} Guid={message.Guid} " +
+            $"HasSourceProcessId={hasSourceProcessId} " +
+            $"HasSourceProcessName={hasSourceProcessName} " +
+            $"HasSourceProcessPath={hasSourceProcessPath}");
+#endif
     }
 
     private sealed record TrayIconHookEndpoint(
