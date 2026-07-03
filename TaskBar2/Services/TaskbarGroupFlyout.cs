@@ -17,18 +17,27 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
     private Rectangle _keepOpenBounds;
     private DateTime? _leaveStartedUtc;
 
-    public TaskbarGroupFlyout(IReadOnlyList<TaskbarItem> items, Action<TaskbarItem> activate)
+    public TaskbarGroupFlyout(
+        IReadOnlyList<TaskbarItem> items,
+        Action<TaskbarItem> activate,
+        Action<TaskbarItem> close)
     {
         AutoClose = false;
         Padding = FormsPadding.Empty;
         Margin = FormsPadding.Empty;
         BackColor = Color.FromArgb(31, 31, 31);
 
-        _previewControl = new PreviewControl(items, item =>
-        {
-            Close(ToolStripDropDownCloseReason.ItemClicked);
-            activate(item);
-        });
+        _previewControl = new PreviewControl(
+            items,
+            item =>
+            {
+                Close(ToolStripDropDownCloseReason.ItemClicked);
+                activate(item);
+            },
+            item =>
+            {
+                close(item);
+            });
         _host = new ToolStripControlHost(_previewControl)
         {
             AutoSize = false,
@@ -36,6 +45,12 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
             Padding = FormsPadding.Empty,
             Size = _previewControl.Size
         };
+        _previewControl.PreviewItemsChanged += (_, _) =>
+        {
+            _host.Size = _previewControl.Size;
+            Size = _host.Size;
+        };
+        _previewControl.PreviewItemsEmpty += (_, _) => Close(ToolStripDropDownCloseReason.ItemClicked);
         Items.Add(_host);
 
         _autoCloseTimer = new FormsTimer
@@ -113,19 +128,27 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
         private const int ItemWidth = 224;
         private const int ItemHeight = 166;
         private const int PreviewHeight = 118;
+        private const int TitleHeight = 24;
+        private const int TitleTopPadding = 8;
+        private const int PreviewTopGap = 6;
+        private const int CloseButtonSize = 22;
+        private const int CloseButtonMargin = 6;
         private const int PaddingSize = 10;
         private const int Gap = 8;
         private const int MaxColumns = 4;
         private readonly List<PreviewItem> _items;
         private readonly Action<TaskbarItem> _activate;
+        private readonly Action<TaskbarItem> _close;
         private readonly FormsTimer _thumbnailRefreshTimer;
         private IntPtr _thumbnailDestination;
         private int _hoverIndex = -1;
+        private int _hoverCloseIndex = -1;
 
-        public PreviewControl(IReadOnlyList<TaskbarItem> items, Action<TaskbarItem> activate)
+        public PreviewControl(IReadOnlyList<TaskbarItem> items, Action<TaskbarItem> activate, Action<TaskbarItem> close)
         {
             _items = items.Select(item => new PreviewItem(item)).ToList();
             _activate = activate;
+            _close = close;
             GroupKey = _items.FirstOrDefault()?.Item.GroupKey ?? "";
 
             var columns = Math.Max(1, Math.Min(MaxColumns, _items.Count));
@@ -149,6 +172,10 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
         }
 
         public string GroupKey { get; }
+
+        public event EventHandler? PreviewItemsChanged;
+
+        public event EventHandler? PreviewItemsEmpty;
 
         public void SetThumbnailDestination(IntPtr destination)
         {
@@ -192,7 +219,7 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
             for (var index = 0; index < _items.Count; index++)
             {
                 var item = _items[index];
-                DrawItem(e.Graphics, item, index == _hoverIndex);
+                DrawItem(e.Graphics, item, index == _hoverIndex, index == _hoverCloseIndex);
             }
 
             UpdateThumbnails();
@@ -201,13 +228,19 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
+            LayoutItems();
             var hoverIndex = _items.FindIndex(item => item.Bounds.Contains(e.Location));
-            if (hoverIndex == _hoverIndex)
+            var hoverCloseIndex = hoverIndex >= 0 && _items[hoverIndex].CloseButtonBounds.Contains(e.Location)
+                ? hoverIndex
+                : -1;
+            if (hoverIndex == _hoverIndex && hoverCloseIndex == _hoverCloseIndex)
             {
                 return;
             }
 
             _hoverIndex = hoverIndex;
+            _hoverCloseIndex = hoverCloseIndex;
+            Cursor = hoverCloseIndex >= 0 ? Cursors.Hand : Cursors.Default;
             Invalidate();
         }
 
@@ -217,6 +250,8 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
             if (_hoverIndex != -1)
             {
                 _hoverIndex = -1;
+                _hoverCloseIndex = -1;
+                Cursor = Cursors.Default;
                 Invalidate();
             }
         }
@@ -229,11 +264,21 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
                 return;
             }
 
+            LayoutItems();
             var item = _items.FirstOrDefault(preview => preview.Bounds.Contains(e.Location));
-            if (item is not null)
+            if (item is null)
             {
-                _activate(item.Item);
+                return;
             }
+
+            if (item.CloseButtonBounds.Contains(e.Location))
+            {
+                _close(item.Item);
+                RemovePreviewItem(item);
+                return;
+            }
+
+            _activate(item.Item);
         }
 
         protected override void Dispose(bool disposing)
@@ -247,6 +292,53 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
             base.Dispose(disposing);
         }
 
+        private void RemovePreviewItem(PreviewItem item)
+        {
+            if (item.Thumbnail != IntPtr.Zero)
+            {
+                NativeMethods.DwmUnregisterThumbnail(item.Thumbnail);
+                item.Thumbnail = IntPtr.Zero;
+            }
+
+            if (item.IconHandle != IntPtr.Zero)
+            {
+                NativeMethods.DestroyIcon(item.IconHandle);
+                item.IconHandle = IntPtr.Zero;
+            }
+
+            var removedIndex = _items.IndexOf(item);
+            if (removedIndex < 0)
+            {
+                return;
+            }
+
+            _items.RemoveAt(removedIndex);
+            _hoverIndex = -1;
+            _hoverCloseIndex = -1;
+            Cursor = Cursors.Default;
+
+            if (_items.Count == 0)
+            {
+                PreviewItemsEmpty?.Invoke(this, EventArgs.Empty);
+                return;
+            }
+
+            UpdateControlSize();
+            LayoutItems();
+            PreviewItemsChanged?.Invoke(this, EventArgs.Empty);
+            Invalidate();
+            UpdateThumbnails();
+        }
+
+        private void UpdateControlSize()
+        {
+            var columns = Math.Max(1, Math.Min(MaxColumns, _items.Count));
+            var rows = (int)Math.Ceiling(_items.Count / (double)columns);
+            Size = new Size(
+                PaddingSize * 2 + columns * ItemWidth + (columns - 1) * Gap,
+                PaddingSize * 2 + rows * ItemHeight + (rows - 1) * Gap);
+        }
+
         private void LayoutItems()
         {
             var columns = Math.Max(1, Math.Min(MaxColumns, _items.Count));
@@ -258,9 +350,19 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
                 var top = PaddingSize + row * (ItemHeight + Gap);
                 var bounds = new Rectangle(left, top, ItemWidth, ItemHeight);
                 _items[index].Bounds = bounds;
+                _items[index].TitleBounds = new Rectangle(
+                    bounds.Left + 10,
+                    bounds.Top + TitleTopPadding,
+                    bounds.Width - 20 - CloseButtonSize - CloseButtonMargin,
+                    TitleHeight);
+                _items[index].CloseButtonBounds = new Rectangle(
+                    bounds.Right - CloseButtonMargin - CloseButtonSize,
+                    bounds.Top + CloseButtonMargin,
+                    CloseButtonSize,
+                    CloseButtonSize);
                 _items[index].PreviewBounds = new Rectangle(
                     bounds.Left + 8,
-                    bounds.Top + 8,
+                    bounds.Top + TitleTopPadding + TitleHeight + PreviewTopGap,
                     bounds.Width - 16,
                     PreviewHeight);
             }
@@ -299,6 +401,7 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
                 return;
             }
 
+            LayoutItems();
             foreach (var item in _items)
             {
                 if (item.Thumbnail == IntPtr.Zero)
@@ -347,7 +450,7 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
                 height);
         }
 
-        private static void DrawItem(Graphics graphics, PreviewItem item, bool hovered)
+        private static void DrawItem(Graphics graphics, PreviewItem item, bool hovered, bool closeHovered)
         {
             using var background = new SolidBrush(hovered
                 ? Color.FromArgb(58, 58, 58)
@@ -368,18 +471,54 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
                 graphics.DrawIcon(icon, iconBounds);
             }
 
-            var titleBounds = new Rectangle(
-                item.Bounds.Left + 8,
-                item.Bounds.Top + PreviewHeight + 14,
-                item.Bounds.Width - 16,
-                item.Bounds.Height - PreviewHeight - 18);
             TextRenderer.DrawText(
                 graphics,
-                item.Item.Title,
+                GetTitle(item.Item),
                 SystemFonts.MessageBoxFont,
-                titleBounds,
+                item.TitleBounds,
                 Color.WhiteSmoke,
                 TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
+
+            if (hovered)
+            {
+                DrawCloseButton(graphics, item.CloseButtonBounds, closeHovered);
+            }
+        }
+
+        private static void DrawCloseButton(Graphics graphics, Rectangle bounds, bool hovered)
+        {
+            if (hovered)
+            {
+                using var hoverBrush = new SolidBrush(Color.FromArgb(82, 82, 82));
+                graphics.FillRectangle(hoverBrush, bounds);
+            }
+
+            using var pen = new Pen(Color.FromArgb(235, 235, 235), 1.7f);
+            var inset = 7;
+            graphics.DrawLine(
+                pen,
+                bounds.Left + inset,
+                bounds.Top + inset,
+                bounds.Right - inset - 1,
+                bounds.Bottom - inset - 1);
+            graphics.DrawLine(
+                pen,
+                bounds.Right - inset - 1,
+                bounds.Top + inset,
+                bounds.Left + inset,
+                bounds.Bottom - inset - 1);
+        }
+
+        private static string GetTitle(TaskbarItem item)
+        {
+            if (!string.IsNullOrWhiteSpace(item.Title))
+            {
+                return item.Title;
+            }
+
+            return string.IsNullOrWhiteSpace(item.ProcessName)
+                ? "Window"
+                : item.ProcessName;
         }
 
         private sealed class PreviewItem(TaskbarItem item)
@@ -387,6 +526,10 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
             public TaskbarItem Item { get; } = item;
 
             public Rectangle Bounds { get; set; }
+
+            public Rectangle TitleBounds { get; set; }
+
+            public Rectangle CloseButtonBounds { get; set; }
 
             public Rectangle PreviewBounds { get; set; }
 

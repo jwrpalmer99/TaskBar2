@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("TaskBar2")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+8d379500caace7e5cb1fa54b98a9dae05ce88362")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+5ef8ce1c935564e822e998b18f4b8d4db1a6491c")]
 [assembly: System.Reflection.AssemblyProductAttribute("TaskBar2")]
 [assembly: System.Reflection.AssemblyTitleAttribute("TaskBar2")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

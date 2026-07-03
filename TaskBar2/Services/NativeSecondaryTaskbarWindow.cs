@@ -32,6 +32,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private static readonly TimeSpan AutoHideHideDelay = TimeSpan.FromMilliseconds(450);
     private static readonly TimeSpan HoverPopupPollInterval = TimeSpan.FromMilliseconds(75);
     private static readonly TimeSpan HoverPopupCloseDelay = TimeSpan.FromMilliseconds(350);
+    private static readonly TimeSpan ClosedPreviewRefreshDelay = TimeSpan.FromMilliseconds(500);
     private const int TbpfNoProgress = 0;
     private const int TbpfIndeterminate = 1;
     private const int TbpfError = 4;
@@ -1204,6 +1205,12 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             OnHoverPreviewActivated();
             WindowActions.Activate(item.Hwnd);
             _windowTracker.Refresh();
+        }, item =>
+        {
+            OnHoverPreviewActivated();
+            WindowActions.Close(item.Hwnd);
+            _windowTracker.Refresh();
+            ScheduleWindowTrackerRefresh(ClosedPreviewRefreshDelay);
         });
         _groupFlyout = flyout;
         flyout.Closed += (_, _) => OnGroupFlyoutClosed(flyout);
@@ -1218,6 +1225,23 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         _groupFlyoutTimer.Stop();
         ResetHoverPopupCloseDelay();
         ClearHoverState();
+    }
+
+    private void ScheduleWindowTrackerRefresh(TimeSpan delay)
+    {
+        var timer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+        {
+            Interval = delay
+        };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            if (!_disposed)
+            {
+                _windowTracker.Refresh();
+            }
+        };
+        timer.Start();
     }
 
     private void OnGroupFlyoutClosed(TaskbarGroupFlyout flyout)
