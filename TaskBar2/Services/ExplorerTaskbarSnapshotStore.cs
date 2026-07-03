@@ -55,6 +55,7 @@ internal static class ExplorerTaskbarSnapshotStore
 
     public static void Apply(ExplorerTaskbarSnapshotMessage message)
     {
+        var keepButtonImages = AppSettingsService.Current.EnableExperimentalExplorerTaskbarButtonImageCapture;
         var buttons = SelectPrimaryTaskbarButtonSequence(message.Buttons
             .Where(button => button.Right > button.Left && button.Bottom > button.Top)
             .Where(IsUsableTaskbarButton)
@@ -71,7 +72,7 @@ internal static class ExplorerTaskbarSnapshotStore
                 button.Top,
                 button.Right,
                 button.Bottom,
-                DecodeBytes(button.ButtonIconPngBase64),
+                keepButtonImages ? DecodeBytes(button.ButtonIconPngBase64) : null,
                 button.ButtonIconFingerprint ?? ""))
             .ToArray()).ToArray();
 

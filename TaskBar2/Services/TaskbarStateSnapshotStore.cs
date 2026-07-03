@@ -33,13 +33,32 @@ internal static class TaskbarStateSnapshotStore
 
             if (string.Equals(message.Operation, "SetOverlayIcon", StringComparison.OrdinalIgnoreCase))
             {
-                var overlayBytes = DecodeIconBytes(message.OverlayPngBase64);
-                updated = updated with
+                var overlayFingerprint = GetIconFingerprint(message.OverlayPngBase64);
+                if (string.IsNullOrWhiteSpace(overlayFingerprint))
                 {
-                    OverlayIcon = DecodeIcon(overlayBytes),
-                    OverlayPngBytes = overlayBytes,
-                    OverlayDescription = message.OverlayDescription ?? ""
-                };
+                    updated = updated with
+                    {
+                        OverlayIcon = null,
+                        OverlayFingerprint = "",
+                        OverlayDescription = message.OverlayDescription ?? ""
+                    };
+                }
+                else if (string.Equals(existing?.OverlayFingerprint, overlayFingerprint, StringComparison.Ordinal))
+                {
+                    updated = updated with
+                    {
+                        OverlayDescription = message.OverlayDescription ?? ""
+                    };
+                }
+                else
+                {
+                    updated = updated with
+                    {
+                        OverlayIcon = DecodeIcon(message.OverlayPngBase64),
+                        OverlayFingerprint = overlayFingerprint,
+                        OverlayDescription = message.OverlayDescription ?? ""
+                    };
+                }
             }
             else if (string.Equals(message.Operation, "SetProgressState", StringComparison.OrdinalIgnoreCase))
             {
@@ -108,30 +127,33 @@ internal static class TaskbarStateSnapshotStore
         }
     }
 
-    private static byte[]? DecodeIconBytes(string? iconPngBase64)
+    private static string GetIconFingerprint(string? iconPngBase64)
+    {
+        if (string.IsNullOrWhiteSpace(iconPngBase64))
+        {
+            return "";
+        }
+
+        return $"png:{iconPngBase64.Length}:{iconPngBase64.GetHashCode(StringComparison.Ordinal):X8}";
+    }
+
+    private static ImageSource? DecodeIcon(string? iconPngBase64)
     {
         if (string.IsNullOrWhiteSpace(iconPngBase64))
         {
             return null;
         }
 
+        byte[] iconPngBytes;
         try
         {
-            return Convert.FromBase64String(iconPngBase64);
+            iconPngBytes = Convert.FromBase64String(iconPngBase64);
         }
         catch (FormatException exception)
         {
             DebugLogger.WriteIfChanged(
                 "taskbar-state-decode-error",
                 $"Taskbar overlay icon decode failed: {exception.GetType().Name}: {exception.Message}");
-            return null;
-        }
-    }
-
-    private static ImageSource? DecodeIcon(byte[]? iconPngBytes)
-    {
-        if (iconPngBytes is null || iconPngBytes.Length == 0)
-        {
             return null;
         }
 
@@ -161,13 +183,13 @@ internal sealed record TaskbarStateChangedEventArgs(IntPtr Hwnd, string Operatio
 
 public sealed record TaskbarButtonState(
     ImageSource? OverlayIcon,
-    byte[]? OverlayPngBytes,
+    string OverlayFingerprint,
     string OverlayDescription,
     int ProgressState,
     ulong ProgressCompleted,
     ulong ProgressTotal)
 {
-    public static TaskbarButtonState Empty { get; } = new(null, null, "", 0, 0, 0);
+    public static TaskbarButtonState Empty { get; } = new(null, "", "", 0, 0, 0);
 }
 
 internal sealed class TaskbarStateHookMessage

@@ -1997,7 +1997,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         foreach (var item in group.Items)
         {
             TaskbarStateSnapshotStore.TryGetState(item.Hwnd, out state);
-            if (state.OverlayPngBytes is not null && state.OverlayPngBytes.Length > 0)
+            if (state.OverlayIcon is not null)
             {
                 return item;
             }
@@ -2516,7 +2516,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private NativeOverlayIcon? GetOverlayIcon(IntPtr hwnd, TaskbarButtonState state)
     {
-        if (state.OverlayPngBytes is null || state.OverlayPngBytes.Length == 0)
+        if (state.OverlayIcon is null)
         {
             if (_overlayCache.Remove(hwnd, out var removed))
             {
@@ -2527,7 +2527,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         }
 
         if (_overlayCache.TryGetValue(hwnd, out var cached) &&
-            ReferenceEquals(cached.Bytes, state.OverlayPngBytes))
+            string.Equals(cached.Fingerprint, state.OverlayFingerprint, StringComparison.Ordinal))
         {
             cached.EnsureBitmap(_renderTarget!);
             return cached;
@@ -2538,9 +2538,13 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             cached.Dispose();
         }
 
-        using var stream = new MemoryStream(state.OverlayPngBytes);
-        var image = Image.FromStream(stream);
-        var overlayIcon = new NativeOverlayIcon(state.OverlayPngBytes, new Bitmap(image));
+        if (CreateBitmapSource(state.OverlayIcon) is not { } bitmapSource)
+        {
+            _overlayCache.Remove(hwnd);
+            return null;
+        }
+
+        var overlayIcon = new NativeOverlayIcon(state.OverlayFingerprint, bitmapSource);
         overlayIcon.EnsureBitmap(_renderTarget!);
         _overlayCache[hwnd] = overlayIcon;
         return overlayIcon;
@@ -3346,17 +3350,17 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         }
     }
 
-    private sealed class NativeOverlayIcon(byte[] bytes, Image image) : IDisposable
+    private sealed class NativeOverlayIcon(string fingerprint, BitmapSource sourceBitmap) : IDisposable
     {
-        public byte[] Bytes { get; } = bytes;
+        public string Fingerprint { get; } = fingerprint;
 
-        public Image Image { get; } = image;
+        public BitmapSource SourceBitmap { get; } = sourceBitmap;
 
         public ID2D1Bitmap? Bitmap { get; private set; }
 
         public void EnsureBitmap(ID2D1HwndRenderTarget target)
         {
-            Bitmap ??= CreateDirect2DBitmap(target, Image);
+            Bitmap ??= CreateDirect2DBitmap(target, SourceBitmap);
         }
 
         public void DisposeBitmap()
@@ -3368,7 +3372,6 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         public void Dispose()
         {
             DisposeBitmap();
-            Image.Dispose();
         }
     }
 

@@ -6,8 +6,10 @@ namespace TaskBar2.Services;
 internal static class DebugLogger
 {
     private const long MaxLogBytes = 1024 * 1024;
+    private const int MaxRememberedMessages = 512;
+    private const int MaxLogMessageLength = 4096;
     private static readonly object Lock = new();
-    private static readonly Dictionary<string, string> LastMessages = [];
+    private static readonly Dictionary<string, ulong> LastMessageHashes = [];
 
     public static string LogDirectory { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -33,6 +35,7 @@ internal static class DebugLogger
 #if !DEBUG
         return;
 #else
+        message = TrimMessage(message);
         lock (Lock)
         {
             Directory.CreateDirectory(LogDirectory);
@@ -48,14 +51,20 @@ internal static class DebugLogger
 #if !DEBUG
         return;
 #else
+        var messageHash = HashMessage(message);
         lock (Lock)
         {
-            if (LastMessages.TryGetValue(key, out var lastMessage) && lastMessage == message)
+            if (LastMessageHashes.TryGetValue(key, out var lastMessageHash) && lastMessageHash == messageHash)
             {
                 return;
             }
 
-            LastMessages[key] = message;
+            if (!LastMessageHashes.ContainsKey(key) && LastMessageHashes.Count >= MaxRememberedMessages)
+            {
+                LastMessageHashes.Clear();
+            }
+
+            LastMessageHashes[key] = messageHash;
         }
 
         Write(message);
@@ -92,5 +101,29 @@ internal static class DebugLogger
         var backupPath = Path.Combine(LogDirectory, "taskbar2.previous.log");
         File.Copy(LogPath, backupPath, overwrite: true);
         File.WriteAllText(LogPath, "");
+    }
+
+    private static string TrimMessage(string message)
+    {
+        if (message.Length <= MaxLogMessageLength)
+        {
+            return message;
+        }
+
+        return message[..MaxLogMessageLength] + $"... [truncated {message.Length - MaxLogMessageLength} chars]";
+    }
+
+    private static ulong HashMessage(string message)
+    {
+        const ulong offset = 14695981039346656037UL;
+        const ulong prime = 1099511628211UL;
+        var hash = offset;
+        foreach (var character in message)
+        {
+            hash ^= character;
+            hash *= prime;
+        }
+
+        return hash;
     }
 }
