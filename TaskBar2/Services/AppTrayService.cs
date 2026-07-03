@@ -5,6 +5,7 @@ namespace TaskBar2.Services;
 
 internal sealed class AppTrayService : IDisposable
 {
+    private readonly Icon? _ownedIcon;
     private readonly Forms.NotifyIcon _notifyIcon;
 
     public AppTrayService(Action refreshDisplays, Action exitApplication)
@@ -19,9 +20,10 @@ internal sealed class AppTrayService : IDisposable
 
         menu.Items.Add("Exit", null, (_, _) => exitApplication());
 
+        _ownedIcon = LoadApplicationIcon();
         _notifyIcon = new Forms.NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = _ownedIcon ?? SystemIcons.Application,
             Text = "TaskBar2",
             ContextMenuStrip = menu,
             Visible = true
@@ -33,5 +35,21 @@ internal sealed class AppTrayService : IDisposable
         _notifyIcon.Visible = false;
         _notifyIcon.ContextMenuStrip?.Dispose();
         _notifyIcon.Dispose();
+        _ownedIcon?.Dispose();
+    }
+
+    private static Icon? LoadApplicationIcon()
+    {
+        try
+        {
+            var executablePath = Environment.ProcessPath;
+            return string.IsNullOrWhiteSpace(executablePath)
+                ? null
+                : Icon.ExtractAssociatedIcon(executablePath);
+        }
+        catch
+        {
+            return null;
+        }
     }
 }
