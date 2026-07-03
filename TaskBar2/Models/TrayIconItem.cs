@@ -11,7 +11,8 @@ public sealed record TrayIconItem(
     TrayIconClickTarget? ClickTarget = null,
     string Identity = "",
     string SourceProcessName = "",
-    string SourceProcessPath = "")
+    string SourceProcessPath = "",
+    bool IsOverflow = false)
 {
     public bool HasIcon => Icon is not null;
 }

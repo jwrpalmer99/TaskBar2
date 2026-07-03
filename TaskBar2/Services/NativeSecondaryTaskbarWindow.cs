@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Windows.Media.Imaging;
@@ -40,6 +41,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private const int MaxJumpListMenuItemTextLength = 96;
     private const double NativeScaleBaseline = 1.5;
     private const float RenderTargetDpi = 96.0f;
+    private const string TrayOverflowButtonKey = "tray-overflow";
     private const string ThemePersonalizeRegistryKey = @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
     private const string SystemUsesLightThemeRegistryValue = "SystemUsesLightTheme";
     private const int DarkTaskbarBackgroundRed = 31;
@@ -72,6 +74,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private readonly DispatcherTimer _autoHideTimer;
     private readonly List<NativeTaskbarButton> _buttons = [];
     private readonly List<NativeTrayButton> _trayButtons = [];
+    private NativeTrayOverflowButton? _trayOverflowButton;
     private readonly Dictionary<string, NativeAppIcon> _iconCache = [];
     private readonly Dictionary<IntPtr, NativeOverlayIcon> _overlayCache = [];
     private readonly Dictionary<string, NativeTrayIconImage> _trayImageCache = [];
@@ -83,6 +86,8 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private IReadOnlyList<TaskbarItem> _visibleWindows = Array.Empty<TaskbarItem>();
     private IReadOnlyList<NativeTaskbarGroup> _visibleGroups = Array.Empty<NativeTaskbarGroup>();
     private IReadOnlyList<TrayIconItem> _trayItems = Array.Empty<TrayIconItem>();
+    private IReadOnlyList<TrayIconItem> _inlineTrayItems = Array.Empty<TrayIconItem>();
+    private IReadOnlyList<TrayIconItem> _overflowTrayItems = Array.Empty<TrayIconItem>();
     private string _clockText = "";
     private string _windowVisualSignature = "";
     private string _trayVisualSignature = "";
@@ -109,6 +114,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private string _hoverTrayKey = "";
     private NativeTaskbarButton? _pendingFlyoutButton;
     private TaskbarGroupFlyout? _groupFlyout;
+    private TrayOverflowFlyout? _trayOverflowFlyout;
     private TaskbarHoverLabel? _hoverLabel;
     private int _width;
     private int _height;
@@ -829,14 +835,33 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         var signature = BuildTrayVisualSignature(latestItems);
         _trayVisualSignature = signature;
         _trayItems = latestItems;
+        PartitionTrayItems();
         RebuildTrayProcessLookups();
         RemoveUnusedTrayImages(_trayItems.Select(GetTrayKey).ToHashSet(StringComparer.Ordinal));
+        UpdateTrayOverflowFlyoutItems();
         if (signature == previousSignature)
         {
             return;
         }
 
         QueueRender();
+    }
+
+    private void PartitionTrayItems()
+    {
+        if (!AppSettingsService.Current.ShowAllTrayIcons)
+        {
+            _inlineTrayItems = _trayItems;
+            _overflowTrayItems = Array.Empty<TrayIconItem>();
+            return;
+        }
+
+        _inlineTrayItems = _trayItems
+            .Where(item => !item.IsOverflow)
+            .ToArray();
+        _overflowTrayItems = _trayItems
+            .Where(item => item.IsOverflow)
+            .ToArray();
     }
 
     private void RebuildTrayProcessLookups()
@@ -1006,7 +1031,9 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return;
         }
 
-        var hoveredTray = HitTestTray(x, y)?.Key ?? "";
+        var hoveredTray = HitTestTrayOverflow(x, y)
+            ? TrayOverflowButtonKey
+            : HitTestTray(x, y)?.Key ?? "";
         var hoveredButton = string.IsNullOrEmpty(hoveredTray)
             ? HitTestTaskbarButton(x, y)
             : null;
@@ -1031,6 +1058,12 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return;
         }
 
+        if (HitTestTrayOverflow(x, y))
+        {
+            ToggleTrayOverflowFlyout();
+            return;
+        }
+
         var trayButton = HitTestTray(x, y);
         if (trayButton is not null)
         {
@@ -1049,9 +1082,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         var button = HitTestTaskbarButton(x, y);
         if (button is null)
         {
+            CloseTrayOverflowFlyout();
             return;
         }
 
+        CloseTrayOverflowFlyout();
         CloseGroupFlyout();
         if (button.Group.HasMultiple)
         {
@@ -1076,6 +1111,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return;
         }
 
+        if (HitTestTrayOverflow(x, y))
+        {
+            return;
+        }
+
         var trayButton = HitTestTray(x, y);
         if (trayButton is not null)
         {
@@ -1086,11 +1126,13 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         var button = HitTestTaskbarButton(x, y);
         if (button is not null)
         {
+            CloseTrayOverflowFlyout();
             CloseGroupFlyout();
             ShowAppContextMenu(button.Group);
             return;
         }
 
+        CloseTrayOverflowFlyout();
         CloseGroupFlyout();
         _contextMenu.Show(System.Windows.Forms.Control.MousePosition);
     }
@@ -1098,6 +1140,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private void OnLeftButtonDoubleClick(int x, int y)
     {
         if (RevealAutoHiddenTaskbar())
+        {
+            return;
+        }
+
+        if (HitTestTrayOverflow(x, y))
         {
             return;
         }
@@ -1133,6 +1180,120 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         }
 
         _trayIconProvider.ForwardClick(item, rightClick: false, doubleClick: true);
+    }
+
+    private void ToggleTrayOverflowFlyout()
+    {
+        if (IsTrayOverflowFlyoutVisible())
+        {
+            CloseTrayOverflowFlyout();
+            QueueRender();
+            return;
+        }
+
+        ShowTrayOverflowFlyout();
+    }
+
+    private void ShowTrayOverflowFlyout()
+    {
+        var trayLayout = GetTrayLayout();
+        var items = GetTrayOverflowItems(trayLayout);
+        if (items.Count == 0 || _trayOverflowButton is null)
+        {
+            CloseTrayOverflowFlyout();
+            return;
+        }
+
+        CloseGroupFlyout();
+        CloseTrayOverflowFlyout();
+
+        var flyout = new TrayOverflowFlyout(
+            items,
+            GetEffectiveTaskbarScale(),
+            _systemUsesLightTheme,
+            (item, rightClick) => ForwardTrayClick(item, rightClick),
+            ForwardTrayDoubleClick);
+        _trayOverflowFlyout = flyout;
+        flyout.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_trayOverflowFlyout, flyout))
+            {
+                _trayOverflowFlyout = null;
+                QueueRender();
+            }
+
+            flyout.Dispose();
+        };
+        flyout.ShowNear(GetScreenBounds(_trayOverflowButton.Bounds), _screen.WorkingArea);
+        QueueRender();
+    }
+
+    private void UpdateTrayOverflowFlyoutItems()
+    {
+        if (!IsTrayOverflowFlyoutVisible() || _trayOverflowFlyout is null)
+        {
+            return;
+        }
+
+        var items = GetTrayOverflowItems(GetTrayLayout());
+        if (items.Count == 0)
+        {
+            CloseTrayOverflowFlyout();
+            return;
+        }
+
+        _trayOverflowFlyout.UpdateItems(items);
+    }
+
+    private void CloseTrayOverflowFlyout()
+    {
+        var flyout = _trayOverflowFlyout;
+        _trayOverflowFlyout = null;
+        if (flyout is not null)
+        {
+            flyout.Close();
+        }
+    }
+
+    private bool IsTrayOverflowFlyoutVisible() =>
+        _trayOverflowFlyout?.Visible == true;
+
+    private IReadOnlyList<TrayIconItem> GetTrayOverflowItems(NativeTrayLayout trayLayout)
+    {
+        if (!trayLayout.HasOverflowButton)
+        {
+            return Array.Empty<TrayIconItem>();
+        }
+
+        var items = new List<TrayIconItem>(_overflowTrayItems.Count + Math.Max(0, _inlineTrayItems.Count - trayLayout.VisibleIconCount));
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in _overflowTrayItems.Concat(_inlineTrayItems.Skip(trayLayout.VisibleIconCount)))
+        {
+            if (seen.Add(GetTrayKey(item)))
+            {
+                items.Add(item);
+            }
+        }
+
+        return items;
+    }
+
+    private Rectangle GetScreenBounds(Rectangle clientBounds)
+    {
+        if (_hwnd != IntPtr.Zero && NativeMethods.GetWindowRect(_hwnd, out var windowRect))
+        {
+            return new Rectangle(
+                windowRect.Left + clientBounds.Left,
+                windowRect.Top + clientBounds.Top,
+                clientBounds.Width,
+                clientBounds.Height);
+        }
+
+        return new Rectangle(
+            _screen.Bounds.Left + clientBounds.Left,
+            _screen.Bounds.Bottom - _height + clientBounds.Top,
+            clientBounds.Width,
+            clientBounds.Height);
     }
 
     private void ScheduleGroupFlyout(NativeTaskbarButton? button)
@@ -1799,6 +1960,9 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         return null;
     }
 
+    private bool HitTestTrayOverflow(int x, int y) =>
+        _trayOverflowButton?.Bounds.Contains(x, y) == true;
+
     private void Paint()
     {
         var paint = new NativeMethods.PaintStruct
@@ -1833,6 +1997,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
         _buttons.Clear();
         _trayButtons.Clear();
+        _trayOverflowButton = null;
         _groupsWithExplorerButtonImage.Clear();
         var trayLayout = GetTrayLayout();
         var pauseIndicatorWidth = GetPauseIndicatorWidth();
@@ -1843,7 +2008,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             $"Screen={_screen.DeviceName} Width={_width} Height={_height} " +
             $"Paused={_nonClockUpdatesPaused} PauseIndicator={pauseIndicatorWidth} " +
             $"Apps={_visibleWindows.Count} Groups={_visibleGroups.Count} AppStart={layout.StartX} AppButton={layout.ButtonSize} " +
-            $"TrayItems={_trayItems.Count} VisibleTray={trayLayout.VisibleIconCount} " +
+            $"TrayItems={_trayItems.Count} InlineTray={_inlineTrayItems.Count} OverflowTray={GetTrayOverflowItems(trayLayout).Count} VisibleTray={trayLayout.VisibleIconCount} " +
             $"TrayStart={trayLayout.StartX} ClockLeft={trayLayout.ClockBounds.Left} ClockRight={trayLayout.ClockBounds.Right}");
         RenderPauseIndicator(target, pauseIndicatorWidth);
         var x = layout.StartX;
@@ -1892,10 +2057,24 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private void RenderTrayButtons(ID2D1HwndRenderTarget target, NativeTrayLayout trayLayout)
     {
+        if (trayLayout.HasOverflowButton)
+        {
+            var bounds = trayLayout.OverflowButtonBounds;
+            if (_hoverTrayKey == TrayOverflowButtonKey || IsTrayOverflowFlyoutVisible())
+            {
+                target.FillRoundedRectangle(
+                    Rounded(Rect(bounds.Left, bounds.Top, bounds.Right, bounds.Bottom), trayLayout.CornerRadius),
+                    _hoverBrush!);
+            }
+
+            DrawTrayOverflowChevron(target, bounds, IsTrayOverflowFlyoutVisible());
+            _trayOverflowButton = new NativeTrayOverflowButton(bounds);
+        }
+
         var x = trayLayout.IconStartX;
         for (var index = 0; index < trayLayout.VisibleIconCount; index++)
         {
-            var item = _trayItems[index];
+            var item = _inlineTrayItems[index];
             var key = GetTrayKey(item);
             var bounds = new Rectangle(x, trayLayout.ButtonY, trayLayout.ButtonWidth, trayLayout.ButtonHeight);
             if (key == _hoverTrayKey)
@@ -1908,6 +2087,21 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             _trayButtons.Add(new NativeTrayButton(key, item, bounds));
             x += trayLayout.ButtonWidth;
         }
+    }
+
+    private void DrawTrayOverflowChevron(ID2D1HwndRenderTarget target, Rectangle bounds, bool expanded)
+    {
+        var scale = GetEffectiveTaskbarScale();
+        var halfWidth = Math.Max(4, (float)(4 * scale));
+        var halfHeight = Math.Max(3, (float)(3 * scale));
+        var centerX = bounds.Left + bounds.Width / 2f;
+        var centerY = bounds.Top + bounds.Height / 2f;
+        var left = new Vector2(centerX - halfWidth, expanded ? centerY - halfHeight / 2f : centerY + halfHeight / 2f);
+        var middle = new Vector2(centerX, expanded ? centerY + halfHeight : centerY - halfHeight);
+        var right = new Vector2(centerX + halfWidth, expanded ? centerY - halfHeight / 2f : centerY + halfHeight / 2f);
+        var strokeWidth = Math.Max(1.4f, (float)(1.4 * scale));
+        target.DrawLine(left, middle, _clockTextBrush!, strokeWidth);
+        target.DrawLine(middle, right, _clockTextBrush!, strokeWidth);
     }
 
     private void RenderButton(ID2D1HwndRenderTarget target, NativeTaskbarGroup group, Rectangle bounds, NativeLayout layout)
@@ -2776,17 +2970,31 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             ? Math.Max(52, (int)Math.Round(62 * scale))
             : 0;
         var rightPadding = Math.Max(6, (int)Math.Round(8 * scale));
-        var trayItemCount = taskbarSettings.MirrorPrimaryNotificationArea ? _trayItems.Count : 0;
-        var reservedRightPadding = taskbarSettings.ShowClock || trayItemCount > 0
+        var canShowTray = taskbarSettings.MirrorPrimaryNotificationArea;
+        var canShowOverflow = canShowTray && AppSettingsService.Current.ShowAllTrayIcons;
+        var inlineTrayItemCount = canShowTray ? _inlineTrayItems.Count : 0;
+        var explicitOverflowCount = canShowOverflow ? _overflowTrayItems.Count : 0;
+        var reservedRightPadding = taskbarSettings.ShowClock || inlineTrayItemCount > 0 || explicitOverflowCount > 0
             ? rightPadding
             : 0;
         var maxTrayIconAreaWidth = Math.Max(0, _width / 2 - clockWidth - reservedRightPadding);
+        var hasOverflowButton = canShowOverflow &&
+                                (explicitOverflowCount > 0 ||
+                                 inlineTrayItemCount * buttonWidth > maxTrayIconAreaWidth);
+        var overflowButtonWidth = hasOverflowButton ? buttonWidth : 0;
         var visibleTrayIconCount = Math.Min(
-            trayItemCount,
-            buttonWidth == 0 ? 0 : maxTrayIconAreaWidth / buttonWidth);
-        var trayWidth = (visibleTrayIconCount * buttonWidth) + clockWidth + reservedRightPadding;
+            inlineTrayItemCount,
+            buttonWidth == 0 ? 0 : Math.Max(0, maxTrayIconAreaWidth - overflowButtonWidth) / buttonWidth);
+        hasOverflowButton = hasOverflowButton &&
+                            (explicitOverflowCount > 0 ||
+                             inlineTrayItemCount > visibleTrayIconCount);
+        overflowButtonWidth = hasOverflowButton ? buttonWidth : 0;
+        var trayWidth = overflowButtonWidth + (visibleTrayIconCount * buttonWidth) + clockWidth + reservedRightPadding;
         var startX = Math.Max(0, _width - trayWidth);
         var buttonY = Math.Max(0, (_height - buttonHeight) / 2);
+        var overflowButtonBounds = hasOverflowButton
+            ? new Rectangle(startX, buttonY, buttonWidth, buttonHeight)
+            : Rectangle.Empty;
         var clockBounds = new RectangleF(
             taskbarSettings.ShowClock ? _width - rightPadding - clockWidth : _width,
             0,
@@ -2795,12 +3003,14 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
         return new NativeTrayLayout(
             startX,
-            startX,
+            startX + overflowButtonWidth,
             buttonY,
             buttonWidth,
             buttonHeight,
             iconSize,
             visibleTrayIconCount,
+            hasOverflowButton,
+            overflowButtonBounds,
             clockBounds,
             Math.Max(9, (int)Math.Round(12 * scale)),
             Math.Max(2, (int)Math.Round(3 * scale)));
@@ -3073,6 +3283,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         _hoverPopupPollTimer.Stop();
         _fullscreenPauseTimer.Stop();
         _autoHideTimer.Stop();
+        CloseTrayOverflowFlyout();
         CloseGroupFlyout();
         if (_hwnd != IntPtr.Zero)
         {
@@ -3269,6 +3480,8 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private sealed record NativeTrayButton(string Key, TrayIconItem Item, Rectangle Bounds);
 
+    private sealed record NativeTrayOverflowButton(Rectangle Bounds);
+
     private sealed record NativeLayout(
         int StartX,
         int ButtonY,
@@ -3288,6 +3501,8 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         int ButtonHeight,
         int IconSize,
         int VisibleIconCount,
+        bool HasOverflowButton,
+        Rectangle OverflowButtonBounds,
         RectangleF ClockBounds,
         int ClockFontSize,
         int CornerRadius);

@@ -59,7 +59,8 @@ internal static class TrayIconSnapshotStore
                          snapshot.Identity),
                      Identity: snapshot.Identity,
                      SourceProcessName: snapshot.SourceProcessName,
-                     SourceProcessPath: snapshot.SourceProcessPath))
+                     SourceProcessPath: snapshot.SourceProcessPath,
+                     IsOverflow: ShouldPlaceInOverflow(snapshot)))
             .ToArray();
     }
 
@@ -324,6 +325,25 @@ internal static class TrayIconSnapshotStore
 
         LogVisibilityDecision(snapshot, visible, reason, windowsDecision);
         return visible;
+    }
+
+    private static bool ShouldPlaceInOverflow(SnapshotState snapshot)
+    {
+        if (!AppSettingsService.Current.ShowAllTrayIcons)
+        {
+            return false;
+        }
+
+        if (snapshot.Hidden)
+        {
+            return true;
+        }
+
+        var windowsDecision = TrayIconVisibilityService.GetVisibilityDecision(
+            snapshot.SourceProcessPath,
+            snapshot.SourceProcessName,
+            snapshot.ToolTip);
+        return !windowsDecision.IsShown;
     }
 
     private static bool IsShownBySettings(

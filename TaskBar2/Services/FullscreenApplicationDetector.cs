@@ -224,16 +224,17 @@ internal static class FullscreenApplicationDetector
 
     private static bool IsPauseFullscreenCandidate(FullscreenWindowInfo info) =>
         !IsKnownNonGameFullscreenProcess(info.ProcessName) &&
-        (info.ShellSignal || LooksLikeFullscreenMode(info.Style));
+        (info.ShellSignal ||
+         LooksLikeFullscreenMode(info.Style));
 
     private static bool LooksLikeFullscreenMode(long style)
     {
         var hasCaption = (style & NativeMethods.WS_CAPTION) == NativeMethods.WS_CAPTION;
         var hasThickFrame = (style & NativeMethods.WS_THICKFRAME) == NativeMethods.WS_THICKFRAME;
         var hasBorder = (style & (NativeMethods.WS_BORDER | NativeMethods.WS_DLGFRAME)) != 0;
-        var isPopup = (style & unchecked((long)0x80000000)) != 0;
+        var isVisible = (style & NativeMethods.WS_VISIBLE) == NativeMethods.WS_VISIBLE;
 
-        return isPopup && !hasCaption && !hasThickFrame && !hasBorder;
+        return isVisible && !hasCaption && !hasThickFrame && !hasBorder;
     }
 
     private static bool IsKnownNonGameFullscreenProcess(string processName)
@@ -351,7 +352,7 @@ internal static class FullscreenApplicationDetector
     private static string BuildDescription(FullscreenWindowInfo info) =>
         $"Hwnd=0x{info.Hwnd.ToInt64():X} Process={info.ProcessName} Title=\"{info.Title}\" Class={info.ClassName} " +
         $"Foreground={info.IsForeground} Rect={FormatRect(info.WindowRect)} Monitor={FormatRect(info.MonitorRect)} " +
-        $"ShellSignal={info.ShellSignal}";
+        $"Style=0x{info.Style:X} ExStyle=0x{info.ExStyle:X} ShellSignal={info.ShellSignal}";
 
     private static string FormatRect(NativeMethods.Rect rect) =>
         $"{rect.Left},{rect.Top},{rect.Right},{rect.Bottom}";
