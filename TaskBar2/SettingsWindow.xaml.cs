@@ -58,8 +58,10 @@ public partial class SettingsWindow : Window
                     ShowOnlyAppsOnThisMonitor = ShowOnlyThisMonitorCheckBox.IsChecked == true,
                     MirrorPrimaryNotificationArea = MirrorPrimaryNotificationAreaCheckBox.IsChecked == true,
                     ShowClock = ShowClockCheckBox.IsChecked == true,
+                    AutomaticallyHideTaskbar = AutomaticallyHideTaskbarCheckBox.IsChecked == true,
                     TaskbarButtonAlignment = GetSelectedAlignment(),
-                    TaskbarScale = TaskbarScaleSlider.Value
+                    TaskbarScale = TaskbarScaleSlider.Value,
+                    TaskbarOpacity = TaskbarOpacitySlider.Value
                 });
             settings.TaskbarPollingIntervalMs = ParseInterval(
                 TaskbarPollingIntervalTextBox.Text,
@@ -77,6 +79,11 @@ public partial class SettingsWindow : Window
     private void TaskbarScaleSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         UpdateScaleText();
+    }
+
+    private void TaskbarOpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        UpdateOpacityText();
     }
 
     private void MonitorComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -123,9 +130,12 @@ public partial class SettingsWindow : Window
             ShowOnlyThisMonitorCheckBox.IsChecked = settings.ShowOnlyAppsOnThisMonitor;
             MirrorPrimaryNotificationAreaCheckBox.IsChecked = settings.MirrorPrimaryNotificationArea;
             ShowClockCheckBox.IsChecked = settings.ShowClock;
+            AutomaticallyHideTaskbarCheckBox.IsChecked = settings.AutomaticallyHideTaskbar;
             SelectAlignment(settings.TaskbarButtonAlignment);
             TaskbarScaleSlider.Value = settings.TaskbarScale;
+            TaskbarOpacitySlider.Value = settings.TaskbarOpacity;
             UpdateScaleText();
+            UpdateOpacityText();
         }
         finally
         {
@@ -169,6 +179,14 @@ public partial class SettingsWindow : Window
         if (TaskbarScaleTextBlock is not null)
         {
             TaskbarScaleTextBlock.Text = $"{TaskbarScaleSlider.Value:P0}";
+        }
+    }
+
+    private void UpdateOpacityText()
+    {
+        if (TaskbarOpacityTextBlock is not null)
+        {
+            TaskbarOpacityTextBlock.Text = $"{TaskbarOpacitySlider.Value:P0}";
         }
     }
 

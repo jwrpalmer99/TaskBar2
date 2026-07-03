@@ -42,16 +42,10 @@ C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\bin\Release\net8.0-windows\runtim
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\bin\Release\net8.0-windows\runtimes\browser\lib\net8.0\System.Text.Encodings.Web.dll
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\TaskBar2.csproj.AssemblyReference.cache
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\SettingsWindow.baml
-C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\TrayMirrorControl.baml
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\App.baml
-C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\MainWindow.g.cs
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\SettingsWindow.g.cs
-C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\TrayMirrorControl.g.cs
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\App.g.cs
-C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\GeneratedInternalTypeHelper.g.cs
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\TaskBar2_MarkupCompile.cache
-C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\TaskBar2_MarkupCompile.lref
-C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\MainWindow.baml
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\TaskBar2.g.resources
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\TaskBar2.GeneratedMSBuildEditorConfig.editorconfig
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\obj\Release\net8.0-windows\TaskBar2.AssemblyInfoInputs.cache
@@ -148,3 +142,4 @@ C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\bin\ReleaseCheck\runtimes\win-arm
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\bin\ReleaseCheck\runtimes\win-x64\native\e_sqlite3.dll
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\bin\ReleaseCheck\runtimes\win-x86\native\e_sqlite3.dll
 C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\bin\ReleaseCheck\runtimes\browser\lib\net8.0\System.Text.Encodings.Web.dll
+C:\Users\Jeremy\source\repos\TaskBar2\TaskBar2\bin\Release\net8.0-windows\OpenMcdf.dll

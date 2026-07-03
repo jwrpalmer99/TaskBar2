@@ -53,6 +53,9 @@
                         <CheckBox x:Name="ShowClockCheckBox"
                                   Content="Show clock"
                                   Margin="0,0,0,10" />
+                        <CheckBox x:Name="AutomaticallyHideTaskbarCheckBox"
+                                  Content="Automatically hide the taskbar"
+                                  Margin="0,0,0,10" />
                         <Grid Margin="0,6,0,10">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -87,6 +90,29 @@
                                     VerticalAlignment="Center"
                                     ValueChanged="TaskbarScaleSlider_ValueChanged" />
                             <TextBlock x:Name="TaskbarScaleTextBlock"
+                                       Grid.Column="2"
+                                       TextAlignment="Right"
+                                       VerticalAlignment="Center"
+                                       Foreground="#202020" />
+                        </Grid>
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="220" />
+                                <ColumnDefinition Width="56" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Taskbar opacity"
+                                       VerticalAlignment="Center"
+                                       Foreground="#202020" />
+                            <Slider x:Name="TaskbarOpacitySlider"
+                                    Grid.Column="1"
+                                    Minimum="0.35"
+                                    Maximum="1"
+                                    TickFrequency="0.05"
+                                    IsSnapToTickEnabled="True"
+                                    VerticalAlignment="Center"
+                                    ValueChanged="TaskbarOpacitySlider_ValueChanged" />
+                            <TextBlock x:Name="TaskbarOpacityTextBlock"
                                        Grid.Column="2"
                                        TextAlignment="Right"
                                        VerticalAlignment="Center"

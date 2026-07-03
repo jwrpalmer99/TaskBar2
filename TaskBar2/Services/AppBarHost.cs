@@ -19,7 +19,7 @@ internal sealed class AppBarHost : IDisposable
         _heightPixels = heightPixels;
     }
 
-    public void Register()
+    public void Register(bool positionWindow = true)
     {
         if (_registered)
         {
@@ -30,10 +30,10 @@ internal sealed class AppBarHost : IDisposable
         data.uCallbackMessage = CallbackMessage;
         NativeMethods.SHAppBarMessage(NativeMethods.ABM_NEW, ref data);
         _registered = true;
-        Position();
+        Position(positionWindow);
     }
 
-    public void Position()
+    public void Position(bool positionWindow = true)
     {
         if (!_registered)
         {
@@ -52,40 +52,49 @@ internal sealed class AppBarHost : IDisposable
         data.rc.Top = data.rc.Bottom - _heightPixels;
         NativeMethods.SHAppBarMessage(NativeMethods.ABM_SETPOS, ref data);
 
-        NativeMethods.SetWindowPos(
-            _hwnd,
-            IntPtr.Zero,
-            data.rc.Left,
-            data.rc.Top,
-            data.rc.Right - data.rc.Left,
-            data.rc.Bottom - data.rc.Top,
-            NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
+        if (positionWindow)
+        {
+            NativeMethods.SetWindowPos(
+                _hwnd,
+                IntPtr.Zero,
+                data.rc.Left,
+                data.rc.Top,
+                data.rc.Right - data.rc.Left,
+                data.rc.Bottom - data.rc.Top,
+                NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
+        }
+
         DebugLogger.WriteIfChanged($"appbar-position-{_hwnd}", $"Appbar positioned: Hwnd=0x{_hwnd.ToInt64():X} Rect={data.rc.Left},{data.rc.Top},{data.rc.Right},{data.rc.Bottom} HeightPixels={_heightPixels}");
     }
 
-    public void RepositionWithoutChangingReservation()
+    public void RepositionWithoutChangingReservation(bool positionWindow = true)
     {
         var bounds = _screen.Bounds;
-        NativeMethods.SetWindowPos(
-            _hwnd,
-            IntPtr.Zero,
-            bounds.Left,
-            bounds.Bottom - _heightPixels,
-            bounds.Width,
-            _heightPixels,
-            NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
+        if (positionWindow)
+        {
+            NativeMethods.SetWindowPos(
+                _hwnd,
+                IntPtr.Zero,
+                bounds.Left,
+                bounds.Bottom - _heightPixels,
+                bounds.Width,
+                _heightPixels,
+                NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
+        }
+
         DebugLogger.WriteIfChanged($"appbar-reposition-{_hwnd}", $"Appbar repositioned: Hwnd=0x{_hwnd.ToInt64():X} Bounds={bounds} HeightPixels={_heightPixels}");
     }
 
     public void SetHeight(int heightPixels)
     {
-        if (_heightPixels == heightPixels)
-        {
-            return;
-        }
-
         _heightPixels = heightPixels;
-        Position();
+        Position(positionWindow: true);
+    }
+
+    public void SetReservedHeight(int heightPixels)
+    {
+        _heightPixels = heightPixels;
+        Position(positionWindow: false);
     }
 
     public void Dispose()

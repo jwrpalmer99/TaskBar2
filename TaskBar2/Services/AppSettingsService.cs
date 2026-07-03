@@ -40,9 +40,13 @@ internal sealed class MonitorTaskbarSettings
 
     public bool ShowClock { get; set; } = true;
 
+    public bool AutomaticallyHideTaskbar { get; set; }
+
     public string TaskbarButtonAlignment { get; set; } = "Left";
 
     public double TaskbarScale { get; set; } = 1.0;
+
+    public double TaskbarOpacity { get; set; } = 1.0;
 }
 
 internal static class AppSettingsService
@@ -53,6 +57,8 @@ internal static class AppSettingsService
     public const int MaxPollingIntervalMs = 30000;
     public const double MinTaskbarScale = 0.75;
     public const double MaxTaskbarScale = 1.75;
+    public const double MinTaskbarOpacity = 0.35;
+    public const double MaxTaskbarOpacity = 1.0;
 
     private static readonly string SettingsDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -77,8 +83,10 @@ internal static class AppSettingsService
             ShowOnlyAppsOnThisMonitor = Current.ShowOnlyAppsOnThisMonitor,
             MirrorPrimaryNotificationArea = Current.MirrorPrimaryNotificationArea,
             ShowClock = true,
+            AutomaticallyHideTaskbar = false,
             TaskbarButtonAlignment = Current.TaskbarButtonAlignment,
-            TaskbarScale = Current.TaskbarScale
+            TaskbarScale = Current.TaskbarScale,
+            TaskbarOpacity = 1.0
         };
     }
 
@@ -173,6 +181,7 @@ internal static class AppSettingsService
     {
         settings.TaskbarButtonAlignment = NormalizeAlignment(settings.TaskbarButtonAlignment);
         settings.TaskbarScale = NormalizeScale(settings.TaskbarScale);
+        settings.TaskbarOpacity = NormalizeOpacity(settings.TaskbarOpacity);
     }
 
     private static string NormalizeAlignment(string value) =>
@@ -185,14 +194,21 @@ internal static class AppSettingsService
             ? 1.0
             : Math.Clamp(value, MinTaskbarScale, MaxTaskbarScale);
 
+    private static double NormalizeOpacity(double value) =>
+        double.IsNaN(value) || value <= 0
+            ? 1.0
+            : Math.Clamp(value, MinTaskbarOpacity, MaxTaskbarOpacity);
+
     private static MonitorTaskbarSettings CloneMonitorTaskbarSettings(MonitorTaskbarSettings settings) =>
         new()
         {
             ShowOnlyAppsOnThisMonitor = settings.ShowOnlyAppsOnThisMonitor,
             MirrorPrimaryNotificationArea = settings.MirrorPrimaryNotificationArea,
             ShowClock = settings.ShowClock,
+            AutomaticallyHideTaskbar = settings.AutomaticallyHideTaskbar,
             TaskbarButtonAlignment = NormalizeAlignment(settings.TaskbarButtonAlignment),
-            TaskbarScale = NormalizeScale(settings.TaskbarScale)
+            TaskbarScale = NormalizeScale(settings.TaskbarScale),
+            TaskbarOpacity = NormalizeOpacity(settings.TaskbarOpacity)
         };
 
     private static void Save()

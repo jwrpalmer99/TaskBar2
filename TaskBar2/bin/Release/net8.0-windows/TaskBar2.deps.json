@@ -9,6 +9,7 @@
       "TaskBar2/1.0.0": {
         "dependencies": {
           "Microsoft.Data.Sqlite": "10.0.9",
+          "OpenMcdf": "3.1.4",
           "Vortice.Direct2D1": "3.8.3"
         },
         "runtime": {
@@ -30,6 +31,14 @@
           "lib/net8.0/Microsoft.Data.Sqlite.dll": {
             "assemblyVersion": "10.0.9.0",
             "fileVersion": "10.0.926.27113"
+          }
+        }
+      },
+      "OpenMcdf/3.1.4": {
+        "runtime": {
+          "lib/net8.0/OpenMcdf.dll": {
+            "assemblyVersion": "3.1.4.0",
+            "fileVersion": "3.1.4.0"
           }
         }
       },
@@ -308,6 +317,13 @@
       "sha512": "sha512-iZrONyMKPjxfVZnUktqO30QjzNwAGH+AxM61s8lKQnVhgbQ3bn0hiXI129ZmVicEbIcwljyy2OVsIYUR51ZHKQ==",
       "path": "microsoft.data.sqlite.core/10.0.9",
       "hashPath": "microsoft.data.sqlite.core.10.0.9.nupkg.sha512"
+    },
+    "OpenMcdf/3.1.4": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-ncchtCh9YKqutHTlUCrr1llXA65ijGOCjXBM0mL1+WaGouApWDEACWbBHGzuYcAvB+rgW6IgO4AKgmZ2v1moNA==",
+      "path": "openmcdf/3.1.4",
+      "hashPath": "openmcdf.3.1.4.nupkg.sha512"
     },
     "SharpGen.Runtime/2.4.2-beta": {
       "type": "package",

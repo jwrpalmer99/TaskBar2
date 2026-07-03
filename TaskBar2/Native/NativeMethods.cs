@@ -16,6 +16,7 @@ internal static class NativeMethods
     internal const long WS_EX_TOOLWINDOW = 0x00000080L;
     internal const long WS_EX_APPWINDOW = 0x00040000L;
     internal const long WS_EX_TOPMOST = 0x00000008L;
+    internal const long WS_EX_LAYERED = 0x00080000L;
     internal const long WS_EX_NOACTIVATE = 0x08000000L;
 
     internal const int CS_VREDRAW = 0x0001;
@@ -33,6 +34,7 @@ internal static class NativeMethods
     internal const int WM_CLOSE = 0x0010;
     internal const int WM_PAINT = 0x000F;
     internal const int WM_ERASEBKGND = 0x0014;
+    internal const int WM_SETTINGCHANGE = 0x001A;
     internal const int WM_GETICON = 0x007F;
     internal const int WM_CONTEXTMENU = 0x007B;
     internal const int WM_SYSCOMMAND = 0x0112;
@@ -42,6 +44,8 @@ internal static class NativeMethods
     internal const int WM_LBUTTONDBLCLK = 0x0203;
     internal const int WM_RBUTTONDOWN = 0x0204;
     internal const int WM_RBUTTONUP = 0x0205;
+    internal const int WM_THEMECHANGED = 0x031A;
+    internal const int WM_DWMCOLORIZATIONCOLORCHANGED = 0x0320;
     internal const int MK_LBUTTON = 0x0001;
     internal const int WM_APP = 0x8000;
     internal const uint TB_BUTTONCOUNT = 0x0418;
@@ -63,6 +67,7 @@ internal static class NativeMethods
     internal const uint TPM_RETURNCMD = 0x0100;
     internal const int IDC_ARROW = 32512;
     internal const int DI_NORMAL = 0x0003;
+    internal const uint LWA_ALPHA = 0x00000002;
 
     internal const uint WINEVENT_OUTOFCONTEXT = 0x0000;
     internal const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
@@ -74,6 +79,9 @@ internal static class NativeMethods
     internal const int CHILDID_SELF = 0;
 
     internal const int DWMWA_CLOAKED = 14;
+    internal const int WCA_ACCENT_POLICY = 19;
+    internal const int ACCENT_DISABLED = 0;
+    internal const int ACCENT_ENABLE_ACRYLICBLURBEHIND = 4;
     internal const int HSHELL_FULLSCREENENTER = 53;
     internal const int HSHELL_FULLSCREENEXIT = 54;
     internal const ushort VT_LPWSTR = 31;
@@ -89,7 +97,10 @@ internal static class NativeMethods
     internal const uint ABE_BOTTOM = 3;
 
     internal const uint SWP_NOZORDER = 0x0004;
+    internal const uint SWP_NOMOVE = 0x0002;
+    internal const uint SWP_NOSIZE = 0x0001;
     internal const uint SWP_NOACTIVATE = 0x0010;
+    internal const uint SWP_FRAMECHANGED = 0x0020;
     internal const int WS_CHILD = 0x40000000;
     internal const int WS_VISIBLE = 0x10000000;
     internal const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
@@ -152,6 +163,17 @@ internal static class NativeMethods
 
     internal static IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex) =>
         IntPtr.Size == 8 ? GetWindowLongPtr64(hWnd, nIndex) : GetWindowLong32(hWnd, nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
+    internal static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongW", SetLastError = true)]
+    internal static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    internal static IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong) =>
+        IntPtr.Size == 8
+            ? SetWindowLongPtr64(hWnd, nIndex, dwNewLong)
+            : new IntPtr(SetWindowLong32(hWnd, nIndex, dwNewLong.ToInt32()));
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     internal static extern ushort RegisterClassEx(ref WndClassEx lpwcx);
@@ -324,6 +346,33 @@ internal static class NativeMethods
         int cy,
         uint uFlags);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint colorKey, byte alpha, uint flags);
+
+    [DllImport("user32.dll")]
+    internal static extern bool SetWindowCompositionAttribute(IntPtr hWnd, ref WindowCompositionAttributeData data);
+
+    internal static bool SetAccentPolicy(IntPtr hwnd, AccentPolicy accentPolicy)
+    {
+        var accentPolicySize = Marshal.SizeOf<AccentPolicy>();
+        var accentPolicyPointer = Marshal.AllocHGlobal(accentPolicySize);
+        try
+        {
+            Marshal.StructureToPtr(accentPolicy, accentPolicyPointer, fDeleteOld: false);
+            var data = new WindowCompositionAttributeData
+            {
+                Attribute = WCA_ACCENT_POLICY,
+                Data = accentPolicyPointer,
+                SizeOfData = accentPolicySize
+            };
+            return SetWindowCompositionAttribute(hwnd, ref data);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(accentPolicyPointer);
+        }
+    }
+
     [DllImport("gdi32.dll")]
     internal static extern bool DeleteObject(IntPtr hObject);
 
@@ -456,6 +505,23 @@ internal static class NativeMethods
         public bool fVisible;
         [MarshalAs(UnmanagedType.Bool)]
         public bool fSourceClientAreaOnly;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct AccentPolicy
+    {
+        public int AccentState;
+        public int AccentFlags;
+        public int GradientColor;
+        public int AnimationId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct WindowCompositionAttributeData
+    {
+        public int Attribute;
+        public IntPtr Data;
+        public int SizeOfData;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

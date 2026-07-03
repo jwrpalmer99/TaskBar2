@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using TaskBar2.Models;
 using TaskBar2.Native;
 using Vortice;
@@ -27,6 +28,8 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private const string WindowClassName = "TaskBar2.NativeSecondaryTaskbarWindow";
     private static readonly TimeSpan ActiveFullscreenPollInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan PausedFullscreenPollInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan AutoHidePollInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan AutoHideHideDelay = TimeSpan.FromMilliseconds(450);
     private const int TbpfNoProgress = 0;
     private const int TbpfIndeterminate = 1;
     private const int TbpfError = 4;
@@ -35,6 +38,14 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private const int MaxJumpListMenuItemTextLength = 96;
     private const double NativeScaleBaseline = 1.5;
     private const float RenderTargetDpi = 96.0f;
+    private const string ThemePersonalizeRegistryKey = @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+    private const string SystemUsesLightThemeRegistryValue = "SystemUsesLightTheme";
+    private const int DarkTaskbarBackgroundRed = 31;
+    private const int DarkTaskbarBackgroundGreen = 31;
+    private const int DarkTaskbarBackgroundBlue = 31;
+    private const int LightTaskbarBackgroundRed = 243;
+    private const int LightTaskbarBackgroundGreen = 243;
+    private const int LightTaskbarBackgroundBlue = 243;
     private static readonly string ExplorerButtonImageCacheDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "TaskBar2",
@@ -54,6 +65,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private readonly DispatcherTimer _renderTimer;
     private readonly DispatcherTimer _groupFlyoutTimer;
     private readonly DispatcherTimer _fullscreenPauseTimer;
+    private readonly DispatcherTimer _autoHideTimer;
     private readonly List<NativeTaskbarButton> _buttons = [];
     private readonly List<NativeTrayButton> _trayButtons = [];
     private readonly Dictionary<string, NativeAppIcon> _iconCache = [];
@@ -83,6 +95,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private ID2D1SolidColorBrush? _pausedProgressBrush;
     private ID2D1SolidColorBrush? _clockTextBrush;
     private ID2D1SolidColorBrush? _pauseIndicatorBrush;
+    private ID2D1SolidColorBrush? _topBorderBrush;
     private IDWriteFactory? _directWriteFactory;
     private IDWriteTextFormat? _clockTextFormat;
     private IntPtr _hwnd;
@@ -98,6 +111,10 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private string _suppressNextTrayLeftButtonUpKey = "";
     private bool _renderQueued;
     private bool _nonClockUpdatesPaused;
+    private bool _autoHideEnabled;
+    private bool _autoHideVisible = true;
+    private DateTime _autoHideLastKeepVisibleUtc = DateTime.UtcNow;
+    private bool _systemUsesLightTheme;
     private bool _disposed;
 
     public NativeSecondaryTaskbarWindow(Screen screen, WindowTracker windowTracker)
@@ -105,6 +122,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         _screen = screen;
         _windowTracker = windowTracker;
         _currentWindows = windowTracker.CurrentWindows;
+        _systemUsesLightTheme = ReadSystemUsesLightTheme();
         _clockTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
         {
             Interval = TimeSpan.FromMinutes(1)
@@ -130,6 +148,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             Interval = ActiveFullscreenPollInterval
         };
         _fullscreenPauseTimer.Tick += (_, _) => UpdateFullscreenPauseState();
+        _autoHideTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+        {
+            Interval = AutoHidePollInterval
+        };
+        _autoHideTimer.Tick += (_, _) => UpdateAutoHideState();
         BuildContextMenu();
         _appContextMenu.ShowItemToolTips = true;
         ApplyWindowList(windowTracker.CurrentWindows, force: true);
@@ -188,8 +211,14 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         }
 
         Windows[_hwnd] = this;
-        _appBar = new AppBarHost(_hwnd, _screen, _height);
-        _appBar.Register();
+        ApplyTaskbarBackdrop();
+        var autoHideEnabled = IsAutoHideEnabled();
+        _appBar = new AppBarHost(
+            _hwnd,
+            _screen,
+            autoHideEnabled ? GetAutoHideTriggerThicknessPixels() : _height);
+        _appBar.Register(positionWindow: !autoHideEnabled);
+        ApplyTaskbarPlacement();
         NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_SHOW);
         NativeMethods.UpdateWindow(_hwnd);
         _clockTimer.Start();
@@ -219,7 +248,8 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     public void RefreshPlacement()
     {
-        _appBar?.RepositionWithoutChangingReservation();
+        _appBar?.RepositionWithoutChangingReservation(positionWindow: !IsAutoHideEnabled());
+        ApplyTaskbarPlacement();
         QueueRender();
     }
 
@@ -247,6 +277,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         {
             case NativeMethods.WM_ERASEBKGND:
                 return new IntPtr(1);
+            case NativeMethods.WM_SETTINGCHANGE:
+            case NativeMethods.WM_THEMECHANGED:
+            case NativeMethods.WM_DWMCOLORIZATIONCOLORCHANGED:
+                OnSystemThemeChanged();
+                return NativeMethods.DefWindowProc(_hwnd, message, wParam, lParam);
             case NativeMethods.WM_SIZE:
                 OnSize(LoWord(lParam), HiWord(lParam));
                 return IntPtr.Zero;
@@ -369,6 +404,186 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         return false;
     }
 
+    private void UpdateAutoHideState()
+    {
+        if (_disposed || _hwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var autoHideEnabled = IsAutoHideEnabled();
+        if (autoHideEnabled != _autoHideEnabled)
+        {
+            ApplyTaskbarPlacement(forceAutoHideStateRefresh: true);
+        }
+
+        if (!_autoHideEnabled || !NativeMethods.GetCursorPos(out var cursor))
+        {
+            return;
+        }
+
+        if (_autoHideVisible)
+        {
+            if (ShouldKeepAutoHideVisible(cursor))
+            {
+                _autoHideLastKeepVisibleUtc = DateTime.UtcNow;
+                return;
+            }
+
+            if (DateTime.UtcNow - _autoHideLastKeepVisibleUtc >= AutoHideHideDelay)
+            {
+                SetAutoHideVisible(false);
+            }
+
+            return;
+        }
+
+        if (IsCursorInAutoHideRevealZone(cursor))
+        {
+            SetAutoHideVisible(true);
+        }
+    }
+
+    private void ApplyTaskbarPlacement(bool forceAutoHideStateRefresh = false)
+    {
+        if (_hwnd == IntPtr.Zero || _appBar is null)
+        {
+            return;
+        }
+
+        var autoHideEnabled = IsAutoHideEnabled();
+        var autoHideChanged = autoHideEnabled != _autoHideEnabled;
+        _autoHideEnabled = autoHideEnabled;
+        if (!_autoHideEnabled)
+        {
+            _autoHideVisible = true;
+            _autoHideTimer.Stop();
+            _appBar.SetHeight(_height);
+            PositionTaskbarWindow(_screen.Bounds.Bottom - _height);
+            _autoHideLastKeepVisibleUtc = DateTime.UtcNow;
+            return;
+        }
+
+        _appBar.SetReservedHeight(GetAutoHideTriggerThicknessPixels());
+        if (autoHideChanged || forceAutoHideStateRefresh)
+        {
+            _autoHideVisible = IsCursorInTaskbarOrRevealZone();
+            _autoHideLastKeepVisibleUtc = DateTime.UtcNow;
+        }
+
+        PositionAutoHideTaskbarWindow();
+        if (!_autoHideTimer.IsEnabled)
+        {
+            _autoHideTimer.Start();
+        }
+    }
+
+    private bool RevealAutoHiddenTaskbar()
+    {
+        if (!_autoHideEnabled || _autoHideVisible)
+        {
+            return false;
+        }
+
+        SetAutoHideVisible(true);
+        return true;
+    }
+
+    private void SetAutoHideVisible(bool visible)
+    {
+        if (!_autoHideEnabled)
+        {
+            return;
+        }
+
+        if (_autoHideVisible == visible)
+        {
+            PositionAutoHideTaskbarWindow();
+            return;
+        }
+
+        _autoHideVisible = visible;
+        if (visible)
+        {
+            _autoHideLastKeepVisibleUtc = DateTime.UtcNow;
+        }
+        else
+        {
+            _hoverHwnd = IntPtr.Zero;
+            _hoverGroupKey = "";
+            _hoverTrayKey = "";
+            _pendingFlyoutButton = null;
+            _groupFlyoutTimer.Stop();
+            CloseGroupFlyout();
+        }
+
+        PositionAutoHideTaskbarWindow();
+        QueueRender(allowWhilePaused: true);
+    }
+
+    private void PositionAutoHideTaskbarWindow()
+    {
+        var bounds = _screen.Bounds;
+        var top = _autoHideVisible
+            ? bounds.Bottom - _height
+            : bounds.Bottom - GetAutoHideTriggerThicknessPixels();
+        PositionTaskbarWindow(top);
+        DebugLogger.WriteIfChanged(
+            $"native-autohide-position-{_screen.DeviceName}",
+            $"Native taskbar autohide position: Screen={_screen.DeviceName} Visible={_autoHideVisible} Top={top} Height={_height}");
+    }
+
+    private void PositionTaskbarWindow(int top)
+    {
+        var bounds = _screen.Bounds;
+        _width = Math.Max(1, bounds.Width);
+        NativeMethods.SetWindowPos(
+            _hwnd,
+            IntPtr.Zero,
+            bounds.Left,
+            top,
+            _width,
+            _height,
+            NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
+    }
+
+    private bool IsCursorInTaskbarOrRevealZone()
+    {
+        return NativeMethods.GetCursorPos(out var cursor) &&
+               (IsCursorInCurrentWindow(cursor) || IsCursorInAutoHideRevealZone(cursor));
+    }
+
+    private bool ShouldKeepAutoHideVisible(NativeMethods.Point cursor)
+    {
+        return IsCursorInCurrentWindow(cursor) ||
+               _contextMenu.Visible ||
+               _appContextMenu.Visible ||
+               _groupFlyout is { Visible: true };
+    }
+
+    private bool IsCursorInCurrentWindow(NativeMethods.Point cursor)
+    {
+        if (_hwnd == IntPtr.Zero || !NativeMethods.GetWindowRect(_hwnd, out var rect))
+        {
+            return false;
+        }
+
+        return cursor.X >= rect.Left &&
+               cursor.X < rect.Right &&
+               cursor.Y >= rect.Top &&
+               cursor.Y < rect.Bottom;
+    }
+
+    private bool IsCursorInAutoHideRevealZone(NativeMethods.Point cursor)
+    {
+        var bounds = _screen.Bounds;
+        var thickness = GetAutoHideTriggerThicknessPixels();
+        return cursor.X >= bounds.Left &&
+               cursor.X < bounds.Right &&
+               cursor.Y >= bounds.Bottom - thickness &&
+               cursor.Y < bounds.Bottom + thickness;
+    }
+
     private void OnWindowsChanged(object? sender, IReadOnlyList<TaskbarItem> windows)
     {
         if (!_dispatcher.CheckAccess())
@@ -459,9 +674,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         if (newHeight != _height)
         {
             _height = newHeight;
-            _appBar?.SetHeight(_height);
         }
 
+        ApplyTaskbarPlacement();
+
+        ApplyTaskbarBackdrop();
         UpdateClock();
         if (UpdateFullscreenPauseState())
         {
@@ -471,6 +688,30 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
         ApplyWindowList(_currentWindows, force: true);
         RefreshTray(force: true);
+        QueueRender(allowWhilePaused: true);
+    }
+
+    private void OnSystemThemeChanged()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (!_dispatcher.CheckAccess())
+        {
+            _ = _dispatcher.BeginInvoke(new Action(OnSystemThemeChanged), DispatcherPriority.Background);
+            return;
+        }
+
+        var systemUsesLightTheme = ReadSystemUsesLightTheme();
+        if (systemUsesLightTheme != _systemUsesLightTheme)
+        {
+            _systemUsesLightTheme = systemUsesLightTheme;
+            DisposeRenderTargetResources();
+        }
+
+        ApplyTaskbarBackdrop();
         QueueRender(allowWhilePaused: true);
     }
 
@@ -672,6 +913,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private void OnMouseMove(int x, int y)
     {
+        if (RevealAutoHiddenTaskbar())
+        {
+            return;
+        }
+
         var hoveredTray = HitTestTray(x, y)?.Key ?? "";
         var hoveredButton = string.IsNullOrEmpty(hoveredTray)
             ? HitTestTaskbarButton(x, y)
@@ -692,6 +938,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private void OnLeftButtonUp(int x, int y)
     {
+        if (RevealAutoHiddenTaskbar())
+        {
+            return;
+        }
+
         var trayButton = HitTestTray(x, y);
         if (trayButton is not null)
         {
@@ -739,6 +990,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private void OnRightButtonUp(int x, int y)
     {
+        if (RevealAutoHiddenTaskbar())
+        {
+            return;
+        }
+
         var trayButton = HitTestTray(x, y);
         if (trayButton is not null)
         {
@@ -758,6 +1014,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private void OnLeftButtonDoubleClick(int x, int y)
     {
+        if (RevealAutoHiddenTaskbar())
+        {
+            return;
+        }
+
         var trayButton = HitTestTray(x, y);
         if (trayButton is null)
         {
@@ -1167,7 +1428,8 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         EnsureRenderTarget();
         var target = _renderTarget!;
         target.BeginDraw();
-        target.Clear(Color(31, 31, 31));
+        target.Clear(GetTaskbarBackgroundColor());
+        RenderTopBorder(target);
 
         _buttons.Clear();
         _trayButtons.Clear();
@@ -1199,6 +1461,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         ulong tag1;
         ulong tag2;
         target.EndDraw(out tag1, out tag2);
+    }
+
+    private void RenderTopBorder(ID2D1HwndRenderTarget target)
+    {
+        target.FillRectangle(Rect(0, 0, _width, 1), _topBorderBrush!);
     }
 
     private void RenderPauseIndicator(ID2D1HwndRenderTarget target, int reservedWidth)
@@ -2063,12 +2330,142 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         return Math.Max(32, (int)Math.Round(40 * GetEffectiveTaskbarScale()));
     }
 
+    private int GetAutoHideTriggerThicknessPixels()
+    {
+        return Math.Max(2, (int)Math.Round(2 * GetEffectiveTaskbarScale()));
+    }
+
     private MonitorTaskbarSettings GetMonitorTaskbarSettings() =>
         AppSettingsService.GetMonitorTaskbarSettings(_screen.DeviceName);
+
+    private bool IsAutoHideEnabled() =>
+        GetMonitorTaskbarSettings().AutomaticallyHideTaskbar;
 
     private double GetEffectiveTaskbarScale()
     {
         return GetMonitorTaskbarSettings().TaskbarScale * NativeScaleBaseline;
+    }
+
+    private double GetTaskbarOpacity()
+    {
+        return GetMonitorTaskbarSettings().TaskbarOpacity;
+    }
+
+    private static bool ReadSystemUsesLightTheme()
+    {
+        try
+        {
+            return Registry.GetValue(
+                ThemePersonalizeRegistryKey,
+                SystemUsesLightThemeRegistryValue,
+                0) switch
+            {
+                int value => value != 0,
+                long value => value != 0,
+                _ => false
+            };
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private (int Red, int Green, int Blue) GetTaskbarBackgroundRgb()
+    {
+        return _systemUsesLightTheme
+            ? (LightTaskbarBackgroundRed, LightTaskbarBackgroundGreen, LightTaskbarBackgroundBlue)
+            : (DarkTaskbarBackgroundRed, DarkTaskbarBackgroundGreen, DarkTaskbarBackgroundBlue);
+    }
+
+    private Color4 GetTaskbarBackgroundColor()
+    {
+        var opacity = (float)GetTaskbarOpacity();
+        var background = GetTaskbarBackgroundRgb();
+        return Color(background.Red, background.Green, background.Blue, opacity);
+    }
+
+    private void ApplyTaskbarBackdrop()
+    {
+        if (_hwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var opacity = GetTaskbarOpacity();
+        ApplyWindowOpacity(opacity);
+        var useAcrylic = opacity < 0.995;
+        var accentPolicy = new NativeMethods.AccentPolicy
+        {
+            AccentState = useAcrylic
+                ? NativeMethods.ACCENT_ENABLE_ACRYLICBLURBEHIND
+                : NativeMethods.ACCENT_DISABLED,
+            AccentFlags = useAcrylic ? 2 : 0,
+            GradientColor = useAcrylic ? CreateAcrylicGradientColor(opacity) : 0,
+            AnimationId = 0
+        };
+
+        try
+        {
+            NativeMethods.SetAccentPolicy(_hwnd, accentPolicy);
+        }
+        catch (Exception exception) when (exception is EntryPointNotFoundException or DllNotFoundException)
+        {
+            DebugLogger.WriteIfChanged(
+                $"native-backdrop-unsupported-{_screen.DeviceName}",
+                $"Native taskbar acrylic backdrop unsupported: Screen={_screen.DeviceName} Error={exception.GetType().Name}: {exception.Message}");
+        }
+    }
+
+    private void ApplyWindowOpacity(double opacity)
+    {
+        var useLayeredOpacity = opacity < 0.995;
+        var currentStyle = NativeMethods.GetWindowLongPtr(_hwnd, NativeMethods.GWL_EXSTYLE).ToInt64();
+        var desiredStyle = useLayeredOpacity
+            ? currentStyle | NativeMethods.WS_EX_LAYERED
+            : currentStyle & ~NativeMethods.WS_EX_LAYERED;
+
+        if (desiredStyle != currentStyle)
+        {
+            NativeMethods.SetWindowLongPtr(_hwnd, NativeMethods.GWL_EXSTYLE, new IntPtr(desiredStyle));
+            NativeMethods.SetWindowPos(
+                _hwnd,
+                IntPtr.Zero,
+                0,
+                0,
+                0,
+                0,
+                NativeMethods.SWP_NOMOVE |
+                NativeMethods.SWP_NOSIZE |
+                NativeMethods.SWP_NOZORDER |
+                NativeMethods.SWP_NOACTIVATE |
+                NativeMethods.SWP_FRAMECHANGED);
+        }
+
+        if (!useLayeredOpacity)
+        {
+            return;
+        }
+
+        var alpha = (byte)Math.Clamp((int)Math.Round(opacity * 255), 1, 255);
+        if (!NativeMethods.SetLayeredWindowAttributes(_hwnd, 0, alpha, NativeMethods.LWA_ALPHA))
+        {
+            DebugLogger.WriteIfChanged(
+                $"native-opacity-failed-{_screen.DeviceName}",
+                $"Native taskbar opacity failed: Screen={_screen.DeviceName} LastError={Marshal.GetLastWin32Error()} Alpha={alpha}");
+        }
+    }
+
+    private int CreateAcrylicGradientColor(double opacity)
+    {
+        var alpha = (uint)Math.Clamp((int)Math.Round(opacity * 255), 0, 255);
+        var background = GetTaskbarBackgroundRgb();
+        var value =
+            (alpha << 24) |
+            ((uint)background.Blue << 16) |
+            ((uint)background.Green << 8) |
+            (uint)background.Red;
+        return unchecked((int)value);
     }
 
     private void EnsureRenderTarget()
@@ -2094,16 +2491,34 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         };
 
         _renderTarget = _factory.CreateHwndRenderTarget(renderTargetProperties, hwndProperties);
-        _activeBrush = _renderTarget.CreateSolidColorBrush(Color(48, 57, 67), null);
-        _hoverBrush = _renderTarget.CreateSolidColorBrush(Color(44, 44, 44), null);
-        _activeAccentBrush = _renderTarget.CreateSolidColorBrush(Color(118, 185, 237), null);
-        _inactiveAccentBrush = _renderTarget.CreateSolidColorBrush(Color(120, 120, 120), null);
-        _progressBrush = _renderTarget.CreateSolidColorBrush(Color(77, 166, 89, 0.36f), null);
-        _indeterminateProgressBrush = _renderTarget.CreateSolidColorBrush(Color(82, 155, 214, 0.36f), null);
-        _errorProgressBrush = _renderTarget.CreateSolidColorBrush(Color(199, 61, 58, 0.36f), null);
-        _pausedProgressBrush = _renderTarget.CreateSolidColorBrush(Color(211, 158, 52, 0.36f), null);
-        _clockTextBrush = _renderTarget.CreateSolidColorBrush(Color(220, 220, 220), null);
-        _pauseIndicatorBrush = _renderTarget.CreateSolidColorBrush(Color(232, 177, 58), null);
+        if (_systemUsesLightTheme)
+        {
+            _activeBrush = _renderTarget.CreateSolidColorBrush(Color(224, 235, 246, 0.96f), null);
+            _hoverBrush = _renderTarget.CreateSolidColorBrush(Color(232, 232, 232, 0.88f), null);
+            _activeAccentBrush = _renderTarget.CreateSolidColorBrush(Color(0, 95, 184), null);
+            _inactiveAccentBrush = _renderTarget.CreateSolidColorBrush(Color(96, 96, 96, 0.86f), null);
+            _progressBrush = _renderTarget.CreateSolidColorBrush(Color(53, 132, 67, 0.30f), null);
+            _indeterminateProgressBrush = _renderTarget.CreateSolidColorBrush(Color(0, 95, 184, 0.30f), null);
+            _errorProgressBrush = _renderTarget.CreateSolidColorBrush(Color(183, 35, 35, 0.30f), null);
+            _pausedProgressBrush = _renderTarget.CreateSolidColorBrush(Color(176, 120, 26, 0.30f), null);
+            _clockTextBrush = _renderTarget.CreateSolidColorBrush(Color(32, 32, 32), null);
+            _pauseIndicatorBrush = _renderTarget.CreateSolidColorBrush(Color(176, 120, 26), null);
+            _topBorderBrush = _renderTarget.CreateSolidColorBrush(Color(0, 0, 0, 0.14f), null);
+        }
+        else
+        {
+            _activeBrush = _renderTarget.CreateSolidColorBrush(Color(48, 57, 67), null);
+            _hoverBrush = _renderTarget.CreateSolidColorBrush(Color(44, 44, 44), null);
+            _activeAccentBrush = _renderTarget.CreateSolidColorBrush(Color(118, 185, 237), null);
+            _inactiveAccentBrush = _renderTarget.CreateSolidColorBrush(Color(120, 120, 120), null);
+            _progressBrush = _renderTarget.CreateSolidColorBrush(Color(77, 166, 89, 0.36f), null);
+            _indeterminateProgressBrush = _renderTarget.CreateSolidColorBrush(Color(82, 155, 214, 0.36f), null);
+            _errorProgressBrush = _renderTarget.CreateSolidColorBrush(Color(199, 61, 58, 0.36f), null);
+            _pausedProgressBrush = _renderTarget.CreateSolidColorBrush(Color(211, 158, 52, 0.36f), null);
+            _clockTextBrush = _renderTarget.CreateSolidColorBrush(Color(220, 220, 220), null);
+            _pauseIndicatorBrush = _renderTarget.CreateSolidColorBrush(Color(232, 177, 58), null);
+            _topBorderBrush = _renderTarget.CreateSolidColorBrush(Color(255, 255, 255, 0.10f), null);
+        }
     }
 
     private void EnsureClockTextFormat(int fontSize)
@@ -2175,6 +2590,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         _renderTimer.Stop();
         _groupFlyoutTimer.Stop();
         _fullscreenPauseTimer.Stop();
+        _autoHideTimer.Stop();
         CloseGroupFlyout();
         if (_hwnd != IntPtr.Zero)
         {
@@ -2211,6 +2627,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         _pausedProgressBrush?.Dispose();
         _clockTextBrush?.Dispose();
         _pauseIndicatorBrush?.Dispose();
+        _topBorderBrush?.Dispose();
         DisposeCachedDirect2DBitmaps();
         _renderTarget?.Dispose();
         _activeBrush = null;
@@ -2223,6 +2640,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         _pausedProgressBrush = null;
         _clockTextBrush = null;
         _pauseIndicatorBrush = null;
+        _topBorderBrush = null;
         _renderTarget = null;
     }
 
