@@ -89,19 +89,14 @@ internal static class FullscreenApplicationDetector
             ClearShellFullscreenWindow(shellFullscreenWindow);
         }
 
-        var foundDescription = "";
-        NativeMethods.EnumWindows((hwnd, _) =>
+        if (foreground != IntPtr.Zero &&
+            IsFullscreenCandidate(foreground, foreground, allowShellSignal: false, out description))
         {
-            if (IsFullscreenCandidate(hwnd, foreground, allowShellSignal: false, out foundDescription))
-            {
-                return false;
-            }
-
             return true;
-        }, IntPtr.Zero);
+        }
 
-        description = foundDescription;
-        return foundDescription.Length > 0;
+        description = "";
+        return false;
     }
 
     private static IntPtr GetShellFullscreenWindow()
@@ -169,7 +164,12 @@ internal static class FullscreenApplicationDetector
             return false;
         }
 
-        if (!allowShellSignal && !LooksLikeFullscreenMode(style))
+        if (NativeMethods.IsZoomed(hwnd))
+        {
+            return false;
+        }
+
+        if (!LooksLikeFullscreenMode(style))
         {
             return false;
         }
@@ -190,8 +190,7 @@ internal static class FullscreenApplicationDetector
         var hasBorder = (style & (NativeMethods.WS_BORDER | NativeMethods.WS_DLGFRAME)) != 0;
         var isPopup = (style & unchecked((long)0x80000000)) != 0;
 
-        return (!hasCaption && !hasThickFrame && !hasBorder) ||
-               (isPopup && !hasCaption && !hasThickFrame);
+        return isPopup && !hasCaption && !hasThickFrame && !hasBorder;
     }
 
     private static bool TryGetCoveredMonitor(

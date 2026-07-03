@@ -67,3 +67,12 @@ C:\Users\Jeremy\AppData\Local\Temp\taskbar2-opacity-fix-out\EasyLoad64.dll
 C:\Users\Jeremy\AppData\Local\Temp\taskbar2-opacity-fix-out\TaskBar2.TrayHook.Agent.exe.config
 C:\Users\Jeremy\AppData\Local\Temp\taskbar2-opacity-fix-out\TaskBar2.TrayHook.Agent.exe
 C:\Users\Jeremy\AppData\Local\Temp\taskbar2-opacity-fix-out\TaskBar2.TrayHook.Agent.pdb
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\EasyHook32.dll
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\EasyHook32Svc.exe
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\EasyHook64.dll
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\EasyHook64Svc.exe
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\EasyLoad32.dll
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\EasyLoad64.dll
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\TaskBar2.TrayHook.Agent.exe.config
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\TaskBar2.TrayHook.Agent.exe
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\TaskBar2.TrayHook.Agent.pdb

@@ -55,10 +55,12 @@ public sealed class WindowTracker : IDisposable
         Hook(NativeMethods.EVENT_OBJECT_CREATE, NativeMethods.EVENT_OBJECT_LOCATIONCHANGE);
         Hook(NativeMethods.EVENT_OBJECT_NAMECHANGE, NativeMethods.EVENT_OBJECT_NAMECHANGE);
         _refreshTimer.Start();
-        Refresh();
+        Refresh(forceWhileFullscreen: true);
     }
 
-    public void Refresh()
+    public void Refresh() => Refresh(forceWhileFullscreen: false);
+
+    private void Refresh(bool forceWhileFullscreen)
     {
         _refreshQueued = false;
         if (_externallyPaused)
@@ -76,10 +78,16 @@ public sealed class WindowTracker : IDisposable
                     $"Window tracker refresh paused during fullscreen app: {fullscreenDescription}");
             }
 
-            return;
-        }
+            if (!forceWhileFullscreen)
+            {
+                return;
+            }
 
-        if (_fullscreenPauseActive)
+            DebugLogger.WriteIfChanged(
+                "window-tracker-initial-fullscreen-snapshot",
+                $"Window tracker publishing startup snapshot while fullscreen pause is active: {fullscreenDescription}");
+        }
+        else if (_fullscreenPauseActive)
         {
             _fullscreenPauseActive = false;
             DebugLogger.Write("Window tracker refresh resumed after fullscreen app.");
@@ -228,7 +236,7 @@ public sealed class WindowTracker : IDisposable
             return false;
         }
 
-        var cache = GetCacheEntry(hwnd);
+        var cache = GetCacheEntry(hwnd, processId);
         if (IsCloaked(hwnd) || IsShellWindow(hwnd, cache))
         {
             return false;
@@ -253,6 +261,7 @@ public sealed class WindowTracker : IDisposable
         var processIdentity = GetProcessIdentity(processId);
         var appUserModelId = GetAppUserModelId(hwnd, cache);
         var packageInfo = PackageAppResolver.Resolve(appUserModelId);
+        ResolveHostedOrPackagedAppIdentity(hwnd, cache, processId, ref processIdentity, ref appUserModelId, ref packageInfo);
         var iconFingerprint = GetIconFingerprint(hwnd, cache, processIdentity, packageInfo);
         item = new TaskbarItem(
             hwnd,
@@ -266,8 +275,9 @@ public sealed class WindowTracker : IDisposable
             processIdentity.Name,
             processIdentity.Path,
             appUserModelId,
-            GetGroupKey(hwnd, cache, processIdentity),
-            packageInfo?.IconPath ?? processIdentity.Path);
+            GetGroupKey(appUserModelId, processIdentity),
+            packageInfo?.IconPath ?? processIdentity.Path,
+            0);
         return true;
     }
 
@@ -328,6 +338,114 @@ public sealed class WindowTracker : IDisposable
         return cache.Title;
     }
 
+    private void ResolveHostedOrPackagedAppIdentity(
+        IntPtr hwnd,
+        WindowCacheEntry cache,
+        uint ownerProcessId,
+        ref ProcessCacheEntry processIdentity,
+        ref string appUserModelId,
+        ref PackageAppInfo? packageInfo)
+    {
+        var isApplicationFrameHost = IsApplicationFrameHost(processIdentity, hwnd);
+        if (packageInfo is not null && !isApplicationFrameHost)
+        {
+            return;
+        }
+
+        if (isApplicationFrameHost &&
+            TryGetHostedAppIdentity(hwnd, cache, ownerProcessId, out var hostedIdentity))
+        {
+            processIdentity = GetProcessIdentity(hostedIdentity.ProcessId);
+            if (!string.IsNullOrWhiteSpace(hostedIdentity.AppUserModelId))
+            {
+                appUserModelId = hostedIdentity.AppUserModelId;
+                packageInfo = PackageAppResolver.Resolve(appUserModelId) ?? packageInfo;
+            }
+
+            if (packageInfo is null &&
+                ShouldResolvePackageByExecutablePath(processIdentity.Path) &&
+                PackageAppResolver.ResolveByExecutablePath(processIdentity.Path, out var hostedAppUserModelId) is { } hostedPackageInfo)
+            {
+                appUserModelId = string.IsNullOrWhiteSpace(appUserModelId) ? hostedAppUserModelId : appUserModelId;
+                packageInfo = hostedPackageInfo;
+            }
+
+            return;
+        }
+
+        if (packageInfo is null &&
+            ShouldResolvePackageByExecutablePath(processIdentity.Path) &&
+            PackageAppResolver.ResolveByExecutablePath(processIdentity.Path, out var resolvedAppUserModelId) is { } resolvedPackageInfo)
+        {
+            appUserModelId = string.IsNullOrWhiteSpace(appUserModelId) ? resolvedAppUserModelId : appUserModelId;
+            packageInfo = resolvedPackageInfo;
+        }
+    }
+
+    private bool TryGetHostedAppIdentity(IntPtr hwnd, WindowCacheEntry cache, uint ownerProcessId, out HostedAppIdentity identity)
+    {
+        if (cache.HostedIdentityLoaded && cache.HostedProcessId != 0)
+        {
+            identity = new HostedAppIdentity(cache.HostedProcessId, cache.HostedAppUserModelId);
+            return true;
+        }
+
+        var found = new HostedAppIdentity(0, "");
+        NativeMethods.EnumChildWindows(hwnd, (childHwnd, _) =>
+        {
+            NativeMethods.GetWindowThreadProcessId(childHwnd, out var childProcessId);
+            if (childProcessId == 0 ||
+                childProcessId == ownerProcessId ||
+                childProcessId == _currentProcessId)
+            {
+                return true;
+            }
+
+            var childIdentity = GetProcessIdentity(childProcessId);
+            if (string.IsNullOrWhiteSpace(childIdentity.Path) ||
+                string.Equals(childIdentity.Name, "ApplicationFrameHost", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            found = new HostedAppIdentity(childProcessId, ReadAppUserModelId(childHwnd));
+            if (!string.IsNullOrWhiteSpace(found.AppUserModelId) ||
+                (ShouldResolvePackageByExecutablePath(childIdentity.Path) &&
+                 PackageAppResolver.ResolveByExecutablePath(childIdentity.Path, out var _) is not null))
+            {
+                return false;
+            }
+
+            return true;
+        }, IntPtr.Zero);
+
+        cache.HostedProcessId = found.ProcessId;
+        cache.HostedAppUserModelId = found.AppUserModelId;
+        cache.HostedIdentityLoaded = found.ProcessId != 0;
+        identity = found;
+        return identity.ProcessId != 0;
+    }
+
+    private static bool IsApplicationFrameHost(ProcessCacheEntry processIdentity, IntPtr hwnd)
+    {
+        return string.Equals(processIdentity.Name, "ApplicationFrameHost", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(GetWindowClassName(hwnd), "ApplicationFrameWindow", StringComparison.Ordinal);
+    }
+
+    private static bool ShouldResolvePackageByExecutablePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        var normalizedPath = path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+        return normalizedPath.Contains(@"\WindowsApps\", StringComparison.OrdinalIgnoreCase) ||
+               normalizedPath.Contains(@"\SystemApps\", StringComparison.OrdinalIgnoreCase) ||
+               normalizedPath.Contains(@"\ImmersiveControlPanel\", StringComparison.OrdinalIgnoreCase) ||
+               normalizedPath.Contains(@"\Microsoft\WindowsApps\", StringComparison.OrdinalIgnoreCase);
+    }
+
     private string GetIconFingerprint(
         IntPtr hwnd,
         WindowCacheEntry cache,
@@ -335,15 +453,22 @@ public sealed class WindowTracker : IDisposable
         PackageAppInfo? packageInfo)
     {
         var now = DateTimeOffset.UtcNow;
+        var packageIconFingerprint = PackageAppResolver.GetFileFingerprint(packageInfo?.IconPath);
+        if (!string.IsNullOrWhiteSpace(packageIconFingerprint))
+        {
+            var fingerprint = $"package:{packageIconFingerprint}";
+            cache.IconFingerprint = fingerprint;
+            cache.IconFingerprintLoaded = true;
+            cache.NextIconFingerprintRefresh = now + IconFingerprintRefreshInterval;
+            return cache.IconFingerprint;
+        }
+
         if (cache.IconFingerprintLoaded && now < cache.NextIconFingerprintRefresh)
         {
             return cache.IconFingerprint;
         }
 
-        var packageIconFingerprint = PackageAppResolver.GetFileFingerprint(packageInfo?.IconPath);
-        cache.IconFingerprint = !string.IsNullOrWhiteSpace(packageIconFingerprint)
-            ? $"package:{packageIconFingerprint}"
-            : WindowIconProvider.GetIconFingerprint(hwnd, processIdentity.Path);
+        cache.IconFingerprint = WindowIconProvider.GetIconFingerprint(hwnd, processIdentity.Path);
         cache.IconFingerprintLoaded = true;
         cache.NextIconFingerprintRefresh = now + IconFingerprintRefreshInterval;
         return cache.IconFingerprint;
@@ -401,14 +526,17 @@ public sealed class WindowTracker : IDisposable
         return cache.MonitorDeviceName;
     }
 
-    private WindowCacheEntry GetCacheEntry(IntPtr hwnd)
+    private WindowCacheEntry GetCacheEntry(IntPtr hwnd, uint processId)
     {
-        if (_windowCache.TryGetValue(hwnd, out var cached))
+        if (_windowCache.TryGetValue(hwnd, out var cached) && cached.ProcessId == processId)
         {
             return cached;
         }
 
-        cached = new WindowCacheEntry();
+        cached = new WindowCacheEntry
+        {
+            ProcessId = processId
+        };
         _windowCache[hwnd] = cached;
         return cached;
     }
@@ -472,14 +600,22 @@ public sealed class WindowTracker : IDisposable
 
     private static string GetAppUserModelId(IntPtr hwnd, WindowCacheEntry cache)
     {
-        if (cache.AppUserModelIdLoaded)
+        if (cache.AppUserModelIdLoaded && !string.IsNullOrWhiteSpace(cache.AppUserModelId))
         {
             return cache.AppUserModelId;
         }
 
+        cache.AppUserModelId = ReadAppUserModelId(hwnd);
+        cache.AppUserModelIdLoaded = true;
+        return cache.AppUserModelId;
+    }
+
+    private static string ReadAppUserModelId(IntPtr hwnd)
+    {
         NativeMethods.IPropertyStore? propertyStore = null;
         var iid = IidPropertyStore;
         var key = AppUserModelIdKey;
+        var appUserModelId = "";
         try
         {
             if (NativeMethods.SHGetPropertyStoreForWindow(hwnd, ref iid, out propertyStore) == 0 &&
@@ -487,7 +623,7 @@ public sealed class WindowTracker : IDisposable
             {
                 try
                 {
-                    cache.AppUserModelId = value.GetString() ?? "";
+                    appUserModelId = value.GetString() ?? "";
                 }
                 finally
                 {
@@ -497,7 +633,7 @@ public sealed class WindowTracker : IDisposable
         }
         catch
         {
-            cache.AppUserModelId = "";
+            appUserModelId = "";
         }
         finally
         {
@@ -507,16 +643,22 @@ public sealed class WindowTracker : IDisposable
             }
         }
 
-        cache.AppUserModelIdLoaded = true;
-        return cache.AppUserModelId;
+        return appUserModelId;
     }
 
-    private static string GetGroupKey(IntPtr hwnd, WindowCacheEntry cache, ProcessCacheEntry processIdentity)
+    private static string GetGroupKey(string appUserModelId, ProcessCacheEntry processIdentity)
     {
-        var appUserModelId = GetAppUserModelId(hwnd, cache);
         return !string.IsNullOrWhiteSpace(appUserModelId)
             ? "appid:" + appUserModelId.ToUpperInvariant()
             : processIdentity.GroupKey;
+    }
+
+    private static string GetWindowClassName(IntPtr hwnd)
+    {
+        var className = new StringBuilder(256);
+        return NativeMethods.GetClassName(hwnd, className, className.Capacity) > 0
+            ? className.ToString()
+            : "";
     }
 
     private void InvalidateCachedMetadata(uint eventType, IntPtr hwnd)
@@ -536,6 +678,7 @@ public sealed class WindowTracker : IDisposable
                 break;
             case NativeMethods.EVENT_OBJECT_LOCATIONCHANGE:
                 cached.MonitorDeviceNameLoaded = false;
+                cached.HostedIdentityLoaded = false;
                 break;
         }
     }
@@ -577,6 +720,8 @@ public sealed class WindowTracker : IDisposable
 
     private sealed class WindowCacheEntry
     {
+        public uint ProcessId { get; init; }
+
         public string Title { get; set; } = "";
 
         public bool TitleLoaded { get; set; }
@@ -604,9 +749,17 @@ public sealed class WindowTracker : IDisposable
         public DateTimeOffset NextIconFingerprintRefresh { get; set; }
 
         public string IconImageFingerprint { get; set; } = "";
+
+        public uint HostedProcessId { get; set; }
+
+        public string HostedAppUserModelId { get; set; } = "";
+
+        public bool HostedIdentityLoaded { get; set; }
     }
 
     private sealed record ProcessCacheEntry(string Name, string Path, string GroupKey);
+
+    private readonly record struct HostedAppIdentity(uint ProcessId, string AppUserModelId);
 
     private readonly record struct WindowSnapshotKey(
         IntPtr Hwnd,

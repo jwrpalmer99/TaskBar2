@@ -134,6 +134,9 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     internal static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
 
+    [DllImport("user32.dll")]
+    internal static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern int GetWindowTextLength(IntPtr hWnd);
 
@@ -393,6 +396,26 @@ internal static class NativeMethods
         uint istepIfAniCur,
         IntPtr hbrFlickerFreeDraw,
         uint diFlags);
+
+    [DllImport("user32.dll", EntryPoint = "PrivateExtractIconsW", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern uint PrivateExtractIcons(
+        string fileName,
+        int iconIndex,
+        int iconWidth,
+        int iconHeight,
+        [Out] IntPtr[] iconHandles,
+        [Out] int[] iconIds,
+        uint iconCount,
+        uint flags);
+
+    [DllImport("shell32.dll", EntryPoint = "SHDefExtractIconW", CharSet = CharSet.Unicode)]
+    internal static extern int SHDefExtractIcon(
+        string iconFile,
+        int iconIndex,
+        uint flags,
+        out IntPtr largeIcon,
+        out IntPtr smallIcon,
+        uint iconSize);
 
     [DllImport("comctl32.dll", SetLastError = true)]
     internal static extern IntPtr ImageList_GetIcon(IntPtr himl, int i, uint flags);

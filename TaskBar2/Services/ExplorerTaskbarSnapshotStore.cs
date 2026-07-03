@@ -17,8 +17,12 @@ internal static class ExplorerTaskbarSnapshotStore
     private const int AutomationMaxDepth = 14;
     private const int AutomationMaxNodes = 600;
     private const int AutomationMaxButtons = 96;
+    private const uint Th32csSnapProcess = 0x00000002;
+    private const int MaxPath = 260;
+    private static readonly IntPtr InvalidHandleValue = new(-1);
     private static readonly TimeSpan AutomationRefreshInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan HookSnapshotFreshDuration = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ProcessAncestryRefreshInterval = TimeSpan.FromSeconds(1);
     private static readonly string[] TaskbarRootClasses = ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
     private static readonly string[] ExcludedNamePrefixes =
     [
@@ -39,11 +43,13 @@ internal static class ExplorerTaskbarSnapshotStore
     private static IReadOnlyList<ExplorerTaskbarButtonItem> Buttons = Array.Empty<ExplorerTaskbarButtonItem>();
     private static readonly Dictionary<string, string> InvalidatedImageFingerprintsByGroupKey = [];
     private static readonly Dictionary<string, string> ResolvedExecutablePathByAppId = new(StringComparer.OrdinalIgnoreCase);
+    private static IReadOnlyDictionary<uint, ProcessAncestryEntry> ProcessAncestryById = new Dictionary<uint, ProcessAncestryEntry>();
     private static string _lastSignature = "";
     private static string _lastAutomationSignature = "";
     private static DateTimeOffset _lastHookSnapshot = DateTimeOffset.MinValue;
     private static DateTimeOffset _lastAutomationRefreshAttempt = DateTimeOffset.MinValue;
     private static DateTimeOffset _lastProxyRefreshRequested = DateTimeOffset.MinValue;
+    private static DateTimeOffset _lastProcessAncestryRefresh = DateTimeOffset.MinValue;
 
     public static event EventHandler? SnapshotChanged;
 
@@ -193,7 +199,7 @@ internal static class ExplorerTaskbarSnapshotStore
             }
 
             if (includePinnedOnly &&
-                IsPinnedButton(button) &&
+                IsPinnedOnlyButton(button) &&
                 TryCreatePinnedItem(button, pinnedShortcutsByTitle ??= GetPinnedShortcutsByTitle(), out var pinnedItem) &&
                 emittedGroupKeys.Add(pinnedItem.GroupKey))
             {
@@ -364,6 +370,12 @@ internal static class ExplorerTaskbarSnapshotStore
         HashSet<string> usedWindowGroupKeys)
     {
         var context = CreateButtonScoreContext(button);
+        var titleMatch = FindUniqueStrongTitleMatch(windowGroups, context, usedWindowGroupKeys);
+        if (titleMatch is not null)
+        {
+            return titleMatch;
+        }
+
         TaskbarItem[]? bestGroup = null;
         var bestScore = 0;
         var tied = false;
@@ -402,6 +414,74 @@ internal static class ExplorerTaskbarSnapshotStore
         }
 
         return bestGroup;
+    }
+
+    private static TaskbarItem[]? FindUniqueStrongTitleMatch(
+        IReadOnlyList<TaskbarItem[]> windowGroups,
+        ButtonScoreContext context,
+        HashSet<string> usedWindowGroupKeys)
+    {
+        if (context.ButtonName.Length < 4)
+        {
+            return null;
+        }
+
+        TaskbarItem[]? match = null;
+        foreach (var group in windowGroups)
+        {
+            if (usedWindowGroupKeys.Contains(group[0].GroupKey) ||
+                !IsStrongTitleOrProcessMatch(group, context))
+            {
+                continue;
+            }
+
+            if (match is not null)
+            {
+                return null;
+            }
+
+            match = group;
+        }
+
+        return match;
+    }
+
+    private static bool IsStrongTitleOrProcessMatch(IReadOnlyList<TaskbarItem> groupItems, ButtonScoreContext context)
+    {
+        foreach (var item in groupItems)
+        {
+            var title = Normalize(item.Title);
+            if (title.Length >= 4 &&
+                (string.Equals(title, context.ButtonName, StringComparison.Ordinal) ||
+                 context.ButtonName.Contains(title, StringComparison.Ordinal) ||
+                 title.Contains(context.ButtonName, StringComparison.Ordinal)))
+            {
+                return true;
+            }
+
+            var processName = Normalize(Path.GetFileNameWithoutExtension(item.ProcessName));
+            if (processName.Length >= 4 &&
+                (string.Equals(processName, context.ButtonName, StringComparison.Ordinal) ||
+                 context.ButtonName.Contains(processName, StringComparison.Ordinal) ||
+                 title.Contains(processName, StringComparison.Ordinal) ||
+                 context.RawButtonName.Contains(processName, StringComparison.Ordinal)))
+            {
+                return true;
+            }
+
+            foreach (var alias in GetProcessAliases(processName))
+            {
+                if (string.Equals(alias, context.ButtonName, StringComparison.Ordinal) ||
+                    context.ButtonName.Contains(alias, StringComparison.Ordinal) ||
+                    context.RawButtonName.Contains(alias, StringComparison.Ordinal) ||
+                    title.Contains(alias, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static TaskbarItem[]? FindExactMatchingWindowGroup(
@@ -683,12 +763,14 @@ internal static class ExplorerTaskbarSnapshotStore
         var rawButtonName = Normalize(button.Name);
         var buttonAppId = GetAutomationAppId(button.AutomationId);
         var normalizedButtonAppId = Normalize(buttonAppId);
+        var buttonProcessPath = ResolveExecutablePathFromAppId(buttonAppId);
         return new ButtonScoreContext(
             buttonName,
             rawButtonName,
             buttonAppId,
             normalizedButtonAppId,
-            NormalizePathForCompare(ResolveExecutablePathFromAppId(buttonAppId)),
+            NormalizePathForCompare(buttonProcessPath),
+            Normalize(Path.GetFileNameWithoutExtension(buttonProcessPath)),
             SplitTokens(buttonAppId).ToArray());
     }
 
@@ -710,6 +792,12 @@ internal static class ExplorerTaskbarSnapshotStore
                 best = Math.Max(best, 140);
             }
 
+            if (context.ButtonProcessName.Length >= 4 &&
+                IsProcessOrDescendantOf(item.ProcessId, context.ButtonProcessName))
+            {
+                best = Math.Max(best, 128);
+            }
+
             var itemAppId = Normalize(item.AppUserModelId);
             if (context.NormalizedButtonAppId.Length > 0 &&
                 itemAppId.Length > 0 &&
@@ -719,7 +807,7 @@ internal static class ExplorerTaskbarSnapshotStore
             }
 
             var title = Normalize(item.Title);
-            if (title.Length >= 6)
+            if (title.Length >= 4 && context.ButtonName.Length >= 4)
             {
                 if (context.ButtonName.Equals(title, StringComparison.Ordinal) ||
                     context.RawButtonName.Equals(title, StringComparison.Ordinal))
@@ -730,7 +818,7 @@ internal static class ExplorerTaskbarSnapshotStore
                 {
                     best = Math.Max(best, 100);
                 }
-                else if (title.Contains(context.ButtonName) && context.ButtonName.Length >= 6)
+                else if (title.Contains(context.ButtonName) && context.ButtonName.Length >= 4)
                 {
                     best = Math.Max(best, 80);
                 }
@@ -763,7 +851,7 @@ internal static class ExplorerTaskbarSnapshotStore
 
             foreach (var token in context.ButtonAppIdTokens)
             {
-                if (title.Contains(token) || processName.Contains(token) || itemAppId.Contains(token))
+                if (HasToken(title, token) || HasToken(processName, token) || HasToken(itemAppId, token))
                 {
                     best = Math.Max(best, 65);
                 }
@@ -803,10 +891,128 @@ internal static class ExplorerTaskbarSnapshotStore
             case "processlasso":
                 yield return "process lasso";
                 break;
+            case "steam":
+            case "steamwebhelper":
+                yield return "steam";
+                yield return "valve steam";
+                break;
+            case "ms-teams":
+            case "teams":
+                yield return "teams";
+                yield return "microsoft teams";
+                break;
         }
     }
 
-    private static IEnumerable<string> SplitTokens(string value)
+    private static bool HasToken(string? value, string expectedToken)
+    {
+        foreach (var token in SplitTokens(value))
+        {
+            if (string.Equals(token, expectedToken, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsProcessOrDescendantOf(uint processId, string normalizedAncestorProcessName)
+    {
+        if (processId == 0 || normalizedAncestorProcessName.Length == 0)
+        {
+            return false;
+        }
+
+        var processes = GetProcessAncestrySnapshot();
+        var visited = new HashSet<uint>();
+        var currentProcessId = processId;
+        for (var depth = 0; depth < 32 && currentProcessId != 0; depth++)
+        {
+            if (!visited.Add(currentProcessId) ||
+                !processes.TryGetValue(currentProcessId, out var process))
+            {
+                return false;
+            }
+
+            if (string.Equals(process.ProcessName, normalizedAncestorProcessName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            currentProcessId = process.ParentProcessId;
+        }
+
+        return false;
+    }
+
+    private static IReadOnlyDictionary<uint, ProcessAncestryEntry> GetProcessAncestrySnapshot()
+    {
+        var now = DateTimeOffset.UtcNow;
+        lock (Sync)
+        {
+            if (now - _lastProcessAncestryRefresh < ProcessAncestryRefreshInterval)
+            {
+                return ProcessAncestryById;
+            }
+        }
+
+        var snapshot = CaptureProcessAncestrySnapshot();
+        lock (Sync)
+        {
+            ProcessAncestryById = snapshot;
+            _lastProcessAncestryRefresh = now;
+            return ProcessAncestryById;
+        }
+    }
+
+    private static IReadOnlyDictionary<uint, ProcessAncestryEntry> CaptureProcessAncestrySnapshot()
+    {
+        var snapshotHandle = CreateToolhelp32Snapshot(Th32csSnapProcess, 0);
+        if (snapshotHandle == IntPtr.Zero || snapshotHandle == InvalidHandleValue)
+        {
+            return ProcessAncestryById;
+        }
+
+        try
+        {
+            var result = new Dictionary<uint, ProcessAncestryEntry>(256);
+            var entry = new ProcessEntry32
+            {
+                Size = Marshal.SizeOf<ProcessEntry32>()
+            };
+
+            if (!Process32First(snapshotHandle, ref entry))
+            {
+                return result;
+            }
+
+            do
+            {
+                if (entry.ProcessId == 0)
+                {
+                    continue;
+                }
+
+                var processName = Normalize(Path.GetFileNameWithoutExtension(entry.ExecutableFile));
+                if (processName.Length == 0)
+                {
+                    continue;
+                }
+
+                result[entry.ProcessId] = new ProcessAncestryEntry(processName, entry.ParentProcessId);
+            }
+            while (Process32Next(snapshotHandle, ref entry));
+
+            return result;
+        }
+        finally
+        {
+            NativeMethods.CloseHandle(snapshotHandle);
+        }
+    }
+
+    private static IEnumerable<string> SplitTokens(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -823,14 +1029,21 @@ internal static class ExplorerTaskbarSnapshotStore
         }
     }
 
-    private static string Normalize(string value) =>
-        string.Join(
+    private static string Normalize(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "";
+        }
+
+        return string.Join(
             " ",
             value.Trim()
                 .ToLowerInvariant()
                 .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
 
-    private static string NormalizePathForCompare(string path)
+    private static string NormalizePathForCompare(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -912,10 +1125,11 @@ internal static class ExplorerTaskbarSnapshotStore
 
         var groupKey = GetPinnedGroupKey(appId, processPath, processName);
         var iconPath = FirstNonEmpty(shortcutItem?.IconPath, packageInfo?.IconPath, processPath);
+        var iconIndex = shortcutItem?.IconIndex ?? 0;
         var icon = AppSettingsService.Current.EnableExperimentalExplorerTaskbarButtonImageCapture
             ? CreatePinnedImageSource(button.ButtonIconPngBytes) ?? shortcutItem?.Icon ?? PackageAppResolver.CreateImageSource(packageInfo?.IconPath)
             : shortcutItem?.Icon ?? PackageAppResolver.CreateImageSource(packageInfo?.IconPath);
-        var fingerprint = GetPinnedIconFingerprint(button, iconPath, appId);
+        var fingerprint = GetPinnedIconFingerprint(button, iconPath, iconIndex, appId);
 
         item = new TaskbarItem(
             IntPtr.Zero,
@@ -931,13 +1145,14 @@ internal static class ExplorerTaskbarSnapshotStore
             appId,
             groupKey,
             iconPath,
+            iconIndex,
             shortcutItem?.LaunchPath ?? processPath,
             shortcutItem?.LaunchArguments ?? "",
             shortcutItem?.LaunchWorkingDirectory ?? "");
         return true;
     }
 
-    private static string GetPinnedIconFingerprint(ExplorerTaskbarButtonItem button, string iconPath, string appId)
+    private static string GetPinnedIconFingerprint(ExplorerTaskbarButtonItem button, string iconPath, int iconIndex, string appId)
     {
         if (!string.IsNullOrWhiteSpace(button.ButtonIconFingerprint))
         {
@@ -947,11 +1162,11 @@ internal static class ExplorerTaskbarSnapshotStore
         var fileFingerprint = PackageAppResolver.GetFileFingerprint(iconPath);
         if (!string.IsNullOrWhiteSpace(fileFingerprint))
         {
-            return $"pin:{appId}:{fileFingerprint}";
+            return $"pin:{appId}:{fileFingerprint}:index:{iconIndex}";
         }
 
         return string.IsNullOrWhiteSpace(button.RuntimeId)
-            ? $"pin:{appId}"
+            ? $"pin:{appId}:index:{iconIndex}"
             : button.RuntimeId;
     }
 
@@ -1546,7 +1761,38 @@ internal static class ExplorerTaskbarSnapshotStore
         string ButtonAppId,
         string NormalizedButtonAppId,
         string NormalizedButtonProcessPath,
+        string ButtonProcessName,
         string[] ButtonAppIdTokens);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool Process32First(IntPtr snapshot, ref ProcessEntry32 entry);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool Process32Next(IntPtr snapshot, ref ProcessEntry32 entry);
+
+    private readonly record struct ProcessAncestryEntry(string ProcessName, uint ParentProcessId);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ProcessEntry32
+    {
+        public int Size;
+        public uint Usage;
+        public uint ProcessId;
+        public IntPtr DefaultHeapId;
+        public uint ModuleId;
+        public uint Threads;
+        public uint ParentProcessId;
+        public int PriorityClassBase;
+        public uint Flags;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = MaxPath)]
+        public string ExecutableFile;
+    }
 }
 
 internal sealed record TaskbarRootWindow(

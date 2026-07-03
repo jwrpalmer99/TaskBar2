@@ -12,7 +12,11 @@ internal sealed class AppTrayService : IDisposable
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("Settings", null, (_, _) => AppCommands.ShowSettings());
         menu.Items.Add("Refresh displays", null, (_, _) => refreshDisplays());
-        menu.Items.Add("Open log", null, (_, _) => AppCommands.OpenLog());
+        if (DebugLogger.IsEnabled)
+        {
+            menu.Items.Add("Open log", null, (_, _) => AppCommands.OpenLog());
+        }
+
         menu.Items.Add("Exit", null, (_, _) => exitApplication());
 
         _notifyIcon = new Forms.NotifyIcon

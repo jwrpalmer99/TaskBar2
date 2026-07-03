@@ -16,6 +16,7 @@ public sealed record TaskbarItem(
     string AppUserModelId,
     string GroupKey,
     string IconPath = "",
+    int IconIndex = 0,
     string LaunchPath = "",
     string LaunchArguments = "",
     string LaunchWorkingDirectory = "");

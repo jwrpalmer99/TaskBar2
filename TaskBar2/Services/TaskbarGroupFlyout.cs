@@ -240,7 +240,11 @@ internal sealed class TaskbarGroupFlyout : ToolStripDropDown
                     }
                 }
 
-                item.IconHandle = WindowIconProvider.GetIconHandleCopy(item.Item.Hwnd, item.Item.ProcessPath);
+                item.IconHandle = WindowIconProvider.GetIconHandleCopy(
+                    item.Item.Hwnd,
+                    item.Item.ProcessPath,
+                    item.Item.IconPath,
+                    item.Item.IconIndex);
             }
         }
 

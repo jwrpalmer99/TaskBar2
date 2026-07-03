@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Interop;
@@ -10,7 +11,13 @@ namespace TaskBar2.Services;
 
 internal static class WindowIconProvider
 {
-    public static string GetIconFingerprint(IntPtr hwnd, string? executablePath = null, string? iconPath = null)
+    private const int DefaultIconSize = 32;
+
+    public static string GetIconFingerprint(
+        IntPtr hwnd,
+        string? executablePath = null,
+        string? iconPath = null,
+        int iconIndex = 0)
     {
         var iconHandle = GetWindowIconHandle(hwnd);
         if (iconHandle != IntPtr.Zero)
@@ -27,48 +34,114 @@ internal static class WindowIconProvider
         try
         {
             var info = new FileInfo(sourcePath);
-            return $"file:{info.FullName.ToUpperInvariant()}:{info.Length}:{info.LastWriteTimeUtc.Ticks}";
+            return $"file:{info.FullName.ToUpperInvariant()}:{info.Length}:{info.LastWriteTimeUtc.Ticks}:index:{iconIndex}";
         }
         catch
         {
-            return $"file:{sourcePath.ToUpperInvariant()}";
+            return $"file:{sourcePath.ToUpperInvariant()}:index:{iconIndex}";
         }
     }
 
-    public static ImageSource? GetIcon(IntPtr hwnd, string? executablePath = null, string? iconPath = null)
+    public static ImageSource? GetIcon(
+        IntPtr hwnd,
+        string? executablePath = null,
+        string? iconPath = null,
+        int iconIndex = 0,
+        int desiredSize = DefaultIconSize)
     {
         var iconHandle = GetWindowIconHandle(hwnd);
+        var sourcePath = GetIconSourcePath(hwnd, executablePath, iconPath);
         if (iconHandle != IntPtr.Zero)
         {
+            if (!IsIconAtLeastSize(iconHandle, desiredSize) &&
+                sourcePath is not null &&
+                TryExtractIconHandle(sourcePath, iconIndex, desiredSize, out var replacementIcon))
+            {
+                try
+                {
+                    return CreateImage(replacementIcon);
+                }
+                finally
+                {
+                    NativeMethods.DestroyIcon(replacementIcon);
+                }
+            }
+
             return CreateImage(iconHandle);
         }
 
-        var sourcePath = GetIconSourcePath(hwnd, executablePath, iconPath);
         if (sourcePath is null)
         {
             return null;
         }
 
-        using var icon = Icon.ExtractAssociatedIcon(sourcePath);
-        return icon is null ? null : CreateImage(icon.Handle);
-    }
-
-    public static IntPtr GetIconHandleCopy(IntPtr hwnd, string? executablePath = null, string? iconPath = null)
-    {
-        var iconHandle = GetWindowIconHandle(hwnd);
-        if (iconHandle != IntPtr.Zero)
+        if (TryExtractIconHandle(sourcePath, iconIndex, desiredSize, out var extractedIcon))
         {
-            return NativeMethods.CopyIcon(iconHandle);
+            try
+            {
+                return CreateImage(extractedIcon);
+            }
+            finally
+            {
+                NativeMethods.DestroyIcon(extractedIcon);
+            }
         }
 
+        try
+        {
+            using var icon = Icon.ExtractAssociatedIcon(sourcePath);
+            return icon is null ? null : CreateImage(icon.Handle);
+        }
+        catch (Exception exception) when (exception is ArgumentException or FileNotFoundException or UnauthorizedAccessException or ExternalException)
+        {
+            return null;
+        }
+    }
+
+    public static IntPtr GetIconHandleCopy(
+        IntPtr hwnd,
+        string? executablePath = null,
+        string? iconPath = null,
+        int iconIndex = 0,
+        int desiredSize = DefaultIconSize)
+    {
+        var iconHandle = GetWindowIconHandle(hwnd);
         var sourcePath = GetIconSourcePath(hwnd, executablePath, iconPath);
+        if (iconHandle != IntPtr.Zero)
+        {
+            if (!IsIconAtLeastSize(iconHandle, desiredSize) &&
+                sourcePath is not null &&
+                TryExtractIconHandle(sourcePath, iconIndex, desiredSize, out var replacementIcon))
+            {
+                return replacementIcon;
+            }
+
+            var copiedIcon = NativeMethods.CopyIcon(iconHandle);
+            if (copiedIcon != IntPtr.Zero)
+            {
+                return copiedIcon;
+            }
+        }
+
         if (sourcePath is null)
         {
             return IntPtr.Zero;
         }
 
-        using var icon = Icon.ExtractAssociatedIcon(sourcePath);
-        return icon is null ? IntPtr.Zero : NativeMethods.CopyIcon(icon.Handle);
+        if (TryExtractIconHandle(sourcePath, iconIndex, desiredSize, out var extractedIcon))
+        {
+            return extractedIcon;
+        }
+
+        try
+        {
+            using var icon = Icon.ExtractAssociatedIcon(sourcePath);
+            return icon is null ? IntPtr.Zero : NativeMethods.CopyIcon(icon.Handle);
+        }
+        catch (Exception exception) when (exception is ArgumentException or FileNotFoundException or UnauthorizedAccessException or ExternalException)
+        {
+            return IntPtr.Zero;
+        }
     }
 
     private static string? GetIconSourcePath(IntPtr hwnd, string? executablePath, string? iconPath)
@@ -89,6 +162,11 @@ internal static class WindowIconProvider
 
     private static IntPtr GetWindowIconHandle(IntPtr hwnd)
     {
+        if (hwnd == IntPtr.Zero)
+        {
+            return IntPtr.Zero;
+        }
+
         var icon = GetWindowIconHandle(hwnd, NativeMethods.ICON_BIG);
         if (icon != IntPtr.Zero)
         {
@@ -128,6 +206,96 @@ internal static class WindowIconProvider
             out var result);
 
         return result;
+    }
+
+    private static bool TryExtractIconHandle(string sourcePath, int iconIndex, int desiredSize, out IntPtr iconHandle)
+    {
+        iconHandle = IntPtr.Zero;
+        var size = Math.Clamp(desiredSize, 16, 256);
+        if (TryShellExtractIconHandle(sourcePath, iconIndex, size, out iconHandle))
+        {
+            return true;
+        }
+
+        var handles = new[] { IntPtr.Zero };
+        var iconIds = new[] { 0 };
+        uint extracted;
+        try
+        {
+            extracted = NativeMethods.PrivateExtractIcons(
+                sourcePath,
+                iconIndex,
+                size,
+                size,
+                handles,
+                iconIds,
+                1,
+                0);
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        if (extracted == 0 || extracted == uint.MaxValue || handles[0] == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        iconHandle = handles[0];
+        return true;
+    }
+
+    private static bool TryShellExtractIconHandle(string sourcePath, int iconIndex, int desiredSize, out IntPtr iconHandle)
+    {
+        iconHandle = IntPtr.Zero;
+        var packedSize = (uint)(desiredSize | (desiredSize << 16));
+        IntPtr largeIcon = IntPtr.Zero;
+        IntPtr smallIcon = IntPtr.Zero;
+        try
+        {
+            if (NativeMethods.SHDefExtractIcon(sourcePath, iconIndex, 0, out largeIcon, out smallIcon, packedSize) < 0)
+            {
+                return false;
+            }
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+        finally
+        {
+            if (smallIcon != IntPtr.Zero)
+            {
+                NativeMethods.DestroyIcon(smallIcon);
+            }
+        }
+
+        if (largeIcon == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        iconHandle = largeIcon;
+        return true;
+    }
+
+    private static bool IsIconAtLeastSize(IntPtr iconHandle, int desiredSize)
+    {
+        if (desiredSize <= 0)
+        {
+            return true;
+        }
+
+        try
+        {
+            using var icon = Icon.FromHandle(iconHandle);
+            return icon.Width >= desiredSize && icon.Height >= desiredSize;
+        }
+        catch (Exception exception) when (exception is ArgumentException or ExternalException)
+        {
+            return true;
+        }
     }
 
     private static ImageSource CreateImage(IntPtr iconHandle)

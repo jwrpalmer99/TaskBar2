@@ -99,13 +99,13 @@ internal static partial class PinnedTaskbarShortcutProvider
             var processPath = ResolveProcessPath(targetPath, iconPath, title);
             var processName = GetProcessName(processPath, arguments, title);
             var groupKey = GetPinnedGroupKey(processPath, processName, shortcutFile.FullName);
-            var icon = WindowIconProvider.GetIcon(IntPtr.Zero, processPath, iconPath);
+            var icon = WindowIconProvider.GetIcon(IntPtr.Zero, processPath, iconPath, iconLocation.Index);
 
             return new TaskbarItem(
                 IntPtr.Zero,
                 title,
                 icon,
-                GetFingerprint(shortcutFile, processPath, iconPath, arguments),
+                GetFingerprint(shortcutFile, processPath, iconPath, iconLocation.Index, arguments),
                 IsActive: false,
                 IsMinimized: false,
                 MonitorDeviceName: "",
@@ -115,6 +115,7 @@ internal static partial class PinnedTaskbarShortcutProvider
                 AppUserModelId: "",
                 groupKey,
                 iconPath,
+                iconLocation.Index,
                 shortcutFile.FullName,
                 arguments,
                 workingDirectory);
@@ -218,7 +219,7 @@ internal static partial class PinnedTaskbarShortcutProvider
         return "pin:" + shortcutPath.ToUpperInvariant();
     }
 
-    private static string GetFingerprint(FileInfo shortcutFile, string processPath, string iconPath, string arguments)
+    private static string GetFingerprint(FileInfo shortcutFile, string processPath, string iconPath, int iconIndex, string arguments)
     {
         var iconPart = "";
         if (!string.IsNullOrWhiteSpace(iconPath) && File.Exists(iconPath))
@@ -226,15 +227,15 @@ internal static partial class PinnedTaskbarShortcutProvider
             try
             {
                 var iconFile = new FileInfo(iconPath);
-                iconPart = $"{iconFile.FullName}:{iconFile.Length}:{iconFile.LastWriteTimeUtc.Ticks}";
+                iconPart = $"{iconFile.FullName}:{iconFile.Length}:{iconFile.LastWriteTimeUtc.Ticks}:{iconIndex}";
             }
             catch
             {
-                iconPart = iconPath;
+                iconPart = $"{iconPath}:{iconIndex}";
             }
         }
 
-        return $"pin:{shortcutFile.FullName}:{shortcutFile.LastWriteTimeUtc.Ticks}:{processPath}:{iconPart}:{arguments}";
+        return $"pin:{shortcutFile.FullName}:{shortcutFile.LastWriteTimeUtc.Ticks}:{processPath}:{iconPart}:index:{iconIndex}:{arguments}";
     }
 
     private static string NormalizePath(string path)

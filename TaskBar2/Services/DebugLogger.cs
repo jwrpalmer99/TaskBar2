@@ -15,6 +15,18 @@ internal static class DebugLogger
 
     public static string LogPath { get; } = Path.Combine(LogDirectory, "taskbar2.log");
 
+    public static bool IsEnabled
+    {
+        get
+        {
+#if DEBUG
+            return true;
+#else
+            return false;
+#endif
+        }
+    }
+
     [Conditional("DEBUG")]
     public static void Write(string message)
     {
@@ -52,6 +64,11 @@ internal static class DebugLogger
 
     public static void OpenLog()
     {
+        if (!IsEnabled)
+        {
+            return;
+        }
+
         Directory.CreateDirectory(LogDirectory);
         if (!File.Exists(LogPath))
         {

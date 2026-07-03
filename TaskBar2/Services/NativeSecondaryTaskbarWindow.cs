@@ -46,6 +46,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private const int LightTaskbarBackgroundRed = 243;
     private const int LightTaskbarBackgroundGreen = 243;
     private const int LightTaskbarBackgroundBlue = 243;
+    private const int TopBorderHeight = 2;
     private static readonly string ExplorerButtonImageCacheDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "TaskBar2",
@@ -341,7 +342,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     {
         _contextMenu.Items.Add("Settings", null, (_, _) => AppCommands.ShowSettings());
         _contextMenu.Items.Add("Refresh", null, (_, _) => AppCommands.Refresh());
-        _contextMenu.Items.Add("Open log", null, (_, _) => AppCommands.OpenLog());
+        if (DebugLogger.IsEnabled)
+        {
+            _contextMenu.Items.Add("Open log", null, (_, _) => AppCommands.OpenLog());
+        }
+
         _contextMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         _contextMenu.Items.Add("Exit", null, (_, _) => AppCommands.Exit());
     }
@@ -1465,7 +1470,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private void RenderTopBorder(ID2D1HwndRenderTarget target)
     {
-        target.FillRectangle(Rect(0, 0, _width, 1), _topBorderBrush!);
+        target.FillRectangle(Rect(0, 0, _width, TopBorderHeight), _topBorderBrush!);
     }
 
     private void RenderPauseIndicator(ID2D1HwndRenderTarget target, int reservedWidth)
@@ -1684,7 +1689,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             }
             else
             {
-                bitmap = GetIcon(button.Group.Representative)?.Bitmap;
+                bitmap = GetIcon(button.Group.Representative, layout.IconSize)?.Bitmap;
             }
 
             if (bitmap is null)
@@ -1768,11 +1773,12 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         }
     }
 
-    private NativeAppIcon? GetIcon(TaskbarItem item)
+    private NativeAppIcon? GetIcon(TaskbarItem item, int desiredIconSize)
     {
         var cacheKey = GetIconCacheKey(item);
+        var renderFingerprint = $"{item.IconFingerprint}:icon-size:{desiredIconSize}";
         if (_iconCache.TryGetValue(cacheKey, out var cached) &&
-            string.Equals(cached.Fingerprint, item.IconFingerprint, StringComparison.Ordinal))
+            string.Equals(cached.Fingerprint, renderFingerprint, StringComparison.Ordinal))
         {
             cached.EnsureBitmap(_renderTarget!);
             return cached;
@@ -1784,17 +1790,22 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         }
 
         if (ShouldPreferManagedIcon(item) &&
-            TryCreateManagedIcon(item, out var managedIcon))
+            TryCreateManagedIcon(item, renderFingerprint, out var managedIcon))
         {
             managedIcon.EnsureBitmap(_renderTarget!);
             _iconCache[cacheKey] = managedIcon;
             return managedIcon;
         }
 
-        var icon = WindowIconProvider.GetIconHandleCopy(item.Hwnd, item.ProcessPath, item.IconPath);
+        var icon = WindowIconProvider.GetIconHandleCopy(
+            item.Hwnd,
+            item.ProcessPath,
+            item.IconPath,
+            item.IconIndex,
+            desiredIconSize);
         if (icon == IntPtr.Zero)
         {
-            if (TryCreateManagedIcon(item, out managedIcon))
+            if (TryCreateManagedIcon(item, renderFingerprint, out managedIcon))
             {
                 managedIcon.EnsureBitmap(_renderTarget!);
                 _iconCache[cacheKey] = managedIcon;
@@ -1805,7 +1816,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return null;
         }
 
-        var nativeIcon = new NativeAppIcon(item.IconFingerprint, icon);
+        var nativeIcon = new NativeAppIcon(renderFingerprint, icon, desiredIconSize);
         nativeIcon.EnsureBitmap(_renderTarget!);
         _iconCache[cacheKey] = nativeIcon;
         return nativeIcon;
@@ -1822,7 +1833,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
          (!string.IsNullOrWhiteSpace(item.IconPath) &&
           !string.Equals(item.IconPath, item.ProcessPath, StringComparison.OrdinalIgnoreCase)));
 
-    private static bool TryCreateManagedIcon(TaskbarItem item, out NativeAppIcon icon)
+    private static bool TryCreateManagedIcon(TaskbarItem item, string fingerprint, out NativeAppIcon icon)
     {
         icon = default!;
         if (item.Icon is null || CreateBitmapSource(item.Icon) is not { } bitmapSource)
@@ -1830,7 +1841,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return false;
         }
 
-        icon = new NativeAppIcon(item.IconFingerprint, bitmapSource);
+        icon = new NativeAppIcon(fingerprint, bitmapSource);
         return true;
     }
 
@@ -2023,6 +2034,8 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         var size = Math.Max(image.Width, image.Height);
         var bitmap = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
         using var graphics = Graphics.FromImage(bitmap);
+        ConfigureHighQualityGraphics(graphics);
+        graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
         graphics.Clear(System.Drawing.Color.Transparent);
         graphics.DrawImage(
             image,
@@ -2038,7 +2051,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         var bitmap = new Bitmap(
             Math.Max(1, width),
             Math.Max(1, height),
-            System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
         using var graphics = Graphics.FromImage(bitmap);
         graphics.Clear(System.Drawing.Color.Transparent);
 
@@ -2062,6 +2075,27 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         }
 
         return bitmap;
+    }
+
+    private static BitmapSource? CreateIconBitmapSource(IntPtr iconHandle, int size)
+    {
+        if (iconHandle == IntPtr.Zero || size <= 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            var source = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
+                iconHandle,
+                System.Windows.Int32Rect.Empty,
+                BitmapSizeOptions.FromWidthAndHeight(size, size));
+            return CreateBitmapSource(source);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or ExternalException or NotSupportedException)
+        {
+            return null;
+        }
     }
 
     private NativeOverlayIcon? GetOverlayIcon(IntPtr hwnd, TaskbarButtonState state)
@@ -2194,6 +2228,8 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
         using (var graphics = Graphics.FromImage(bitmap))
         {
+            ConfigureHighQualityGraphics(graphics);
+            graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
             graphics.Clear(System.Drawing.Color.Transparent);
             graphics.DrawImage(image, 0, 0, image.Width, image.Height);
         }
@@ -2216,6 +2252,14 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         {
             bitmap.UnlockBits(data);
         }
+    }
+
+    private static void ConfigureHighQualityGraphics(Graphics graphics)
+    {
+        graphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
+        graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+        graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+        graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
     }
 
     private static string GetTrayKey(TrayIconItem item)
@@ -2245,7 +2289,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private static string BuildWindowVisualSignature(IReadOnlyList<NativeTaskbarGroup> groups)
     {
         return string.Join("|", groups.Select(group =>
-            $"{group.Key}:{string.Join(",", group.Items.Select(item => $"{item.Hwnd.ToInt64():X}:{item.Title}:{item.IsActive}:{item.IsMinimized}:{item.MonitorDeviceName}:{item.IconFingerprint}"))}"));
+            $"{group.Key}:{string.Join(",", group.Items.Select(item => $"{item.Hwnd.ToInt64():X}:{item.Title}:{item.IsActive}:{item.IsMinimized}:{item.MonitorDeviceName}:{item.IconFingerprint}:{item.IconIndex}"))}"));
     }
 
     private int GetPauseIndicatorWidth()
@@ -2503,7 +2547,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             _pausedProgressBrush = _renderTarget.CreateSolidColorBrush(Color(176, 120, 26, 0.30f), null);
             _clockTextBrush = _renderTarget.CreateSolidColorBrush(Color(32, 32, 32), null);
             _pauseIndicatorBrush = _renderTarget.CreateSolidColorBrush(Color(176, 120, 26), null);
-            _topBorderBrush = _renderTarget.CreateSolidColorBrush(Color(0, 0, 0, 0.14f), null);
+            _topBorderBrush = _renderTarget.CreateSolidColorBrush(Color(0, 0, 0, 0.24f), null);
         }
         else
         {
@@ -2517,7 +2561,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             _pausedProgressBrush = _renderTarget.CreateSolidColorBrush(Color(211, 158, 52, 0.36f), null);
             _clockTextBrush = _renderTarget.CreateSolidColorBrush(Color(220, 220, 220), null);
             _pauseIndicatorBrush = _renderTarget.CreateSolidColorBrush(Color(232, 177, 58), null);
-            _topBorderBrush = _renderTarget.CreateSolidColorBrush(Color(255, 255, 255, 0.10f), null);
+            _topBorderBrush = _renderTarget.CreateSolidColorBrush(Color(255, 255, 255, 0.18f), null);
         }
     }
 
@@ -2813,12 +2857,14 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private sealed class NativeAppIcon : IDisposable
     {
         private IntPtr _handle;
+        private readonly int _bitmapSize;
         private readonly BitmapSource? _sourceBitmap;
 
-        public NativeAppIcon(string fingerprint, IntPtr handle)
+        public NativeAppIcon(string fingerprint, IntPtr handle, int bitmapSize)
         {
             Fingerprint = fingerprint;
             _handle = handle;
+            _bitmapSize = bitmapSize;
         }
 
         public NativeAppIcon(string fingerprint, BitmapSource sourceBitmap)
@@ -2849,8 +2895,20 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
                 return;
             }
 
-            using var icon = Icon.FromHandle(_handle);
-            using var image = CreateIconBitmap(_handle, icon.Width, icon.Height);
+            var bitmapSize = _bitmapSize;
+            if (bitmapSize <= 0)
+            {
+                using var icon = Icon.FromHandle(_handle);
+                bitmapSize = Math.Max(icon.Width, icon.Height);
+            }
+
+            if (CreateIconBitmapSource(_handle, bitmapSize) is { } iconBitmapSource)
+            {
+                Bitmap = CreateDirect2DBitmap(target, iconBitmapSource);
+                return;
+            }
+
+            using var image = CreateIconBitmap(_handle, bitmapSize, bitmapSize);
             Bitmap = CreateDirect2DBitmap(target, image);
         }
 
