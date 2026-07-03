@@ -1,7 +1,9 @@
 using System.IO;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Windows.Automation;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using TaskBar2.Models;
@@ -12,17 +14,42 @@ namespace TaskBar2.Services;
 internal static class ExplorerTaskbarSnapshotStore
 {
     private const int MinimumUsableButtonImageBytes = 512;
+    private const int AutomationMaxDepth = 14;
+    private const int AutomationMaxNodes = 600;
+    private const int AutomationMaxButtons = 96;
+    private static readonly TimeSpan AutomationRefreshInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan HookSnapshotFreshDuration = TimeSpan.FromSeconds(5);
+    private static readonly string[] TaskbarRootClasses = ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
+    private static readonly string[] ExcludedNamePrefixes =
+    [
+        "Start",
+        "Search",
+        "Task view",
+        "Widgets",
+        "Copilot",
+        "Show hidden icons",
+        "Show desktop",
+        "Notification center",
+        "Quick settings",
+        "Running applications",
+        "Clock "
+    ];
+
     private static readonly object Sync = new();
     private static IReadOnlyList<ExplorerTaskbarButtonItem> Buttons = Array.Empty<ExplorerTaskbarButtonItem>();
     private static readonly Dictionary<string, string> InvalidatedImageFingerprintsByGroupKey = [];
+    private static readonly Dictionary<string, string> ResolvedExecutablePathByAppId = new(StringComparer.OrdinalIgnoreCase);
     private static string _lastSignature = "";
+    private static string _lastAutomationSignature = "";
+    private static DateTimeOffset _lastHookSnapshot = DateTimeOffset.MinValue;
+    private static DateTimeOffset _lastAutomationRefreshAttempt = DateTimeOffset.MinValue;
     private static DateTimeOffset _lastProxyRefreshRequested = DateTimeOffset.MinValue;
 
     public static event EventHandler? SnapshotChanged;
 
     public static void Apply(ExplorerTaskbarSnapshotMessage message)
     {
-        var buttons = message.Buttons
+        var buttons = SelectPrimaryTaskbarButtonSequence(message.Buttons
             .Where(button => button.Right > button.Left && button.Bottom > button.Top)
             .Where(IsUsableTaskbarButton)
             .Select(button => new ExplorerTaskbarButtonItem(
@@ -40,7 +67,7 @@ internal static class ExplorerTaskbarSnapshotStore
                 button.Bottom,
                 DecodeBytes(button.ButtonIconPngBase64),
                 button.ButtonIconFingerprint ?? ""))
-            .ToArray();
+            .ToArray()).ToArray();
 
         var signature = BuildSignature(message, buttons);
         int retainedCount;
@@ -63,6 +90,10 @@ internal static class ExplorerTaskbarSnapshotStore
             }
 
             Buttons = buttons;
+            if (buttons.Length > 0)
+            {
+                _lastHookSnapshot = DateTimeOffset.UtcNow;
+            }
         }
 
         if (signature == _lastSignature)
@@ -85,9 +116,11 @@ internal static class ExplorerTaskbarSnapshotStore
         return TryForwardClick(groupItems, rightClick, cursor.X, cursor.Y);
     }
 
-    public static IReadOnlyList<TaskbarItem> MergePinnedItems(IReadOnlyList<TaskbarItem> windowItems)
+    public static IReadOnlyList<TaskbarItem> MergePinnedItems(
+        IReadOnlyList<TaskbarItem> windowItems,
+        bool includePinnedOnly = true)
     {
-        if (TryMergeExplorerButtonOrder(windowItems, out var explorerOrderedItems))
+        if (TryMergeExplorerButtonOrder(windowItems, includePinnedOnly, out var explorerOrderedItems))
         {
             return explorerOrderedItems;
         }
@@ -98,17 +131,18 @@ internal static class ExplorerTaskbarSnapshotStore
             return windowItems;
         }
 
-        var merged = MergePinnedOrder(windowItems, pinnedItems);
+        var merged = MergePinnedOrder(windowItems, pinnedItems, includePinnedOnly);
         DebugLogger.WriteIfChanged(
             "taskbar-pinned-merge",
             "Taskbar pinned merge: " +
-            $"Source=Shortcuts Windows={windowItems.Count} PinnedSlots={pinnedItems.Count} Output={merged.Count} " +
+            $"Source=Shortcuts Windows={windowItems.Count} PinnedSlots={pinnedItems.Count} IncludePinnedOnly={includePinnedOnly} Output={merged.Count} " +
             $"Pinned={string.Join(" | ", pinnedItems.Take(24).Select(item => $"{item.Title}:{item.GroupKey}"))}");
         return merged;
     }
 
     private static bool TryMergeExplorerButtonOrder(
         IReadOnlyList<TaskbarItem> windowItems,
+        bool includePinnedOnly,
         out IReadOnlyList<TaskbarItem> orderedItems)
     {
         orderedItems = Array.Empty<TaskbarItem>();
@@ -116,6 +150,8 @@ internal static class ExplorerTaskbarSnapshotStore
         {
             return false;
         }
+
+        RefreshAutomationSnapshotIfHookIsStale();
 
         ExplorerTaskbarButtonItem[] buttons;
         lock (Sync)
@@ -138,9 +174,12 @@ internal static class ExplorerTaskbarSnapshotStore
         var matchedButtons = 0;
         var pinnedButtons = 0;
 
-        foreach (var button in GetVisualButtonOrder(buttons))
+        IReadOnlyDictionary<string, TaskbarItem>? pinnedShortcutsByTitle = null;
+        foreach (var button in buttons)
         {
-            var matchingGroup = FindMatchingWindowGroup(windowGroups, button, usedWindowGroupKeys);
+            var matchingGroup = IsPinnedOnlyButton(button)
+                ? FindExactMatchingWindowGroup(windowGroups, button, usedWindowGroupKeys)
+                : FindMatchingWindowGroup(windowGroups, button, usedWindowGroupKeys);
             if (matchingGroup is not null)
             {
                 usedWindowGroupKeys.Add(matchingGroup[0].GroupKey);
@@ -153,12 +192,23 @@ internal static class ExplorerTaskbarSnapshotStore
                 continue;
             }
 
-            if (IsPinnedButton(button) &&
-                TryCreatePinnedItem(button, out var pinnedItem) &&
+            if (includePinnedOnly &&
+                IsPinnedButton(button) &&
+                TryCreatePinnedItem(button, pinnedShortcutsByTitle ??= GetPinnedShortcutsByTitle(), out var pinnedItem) &&
                 emittedGroupKeys.Add(pinnedItem.GroupKey))
             {
                 merged.Add(pinnedItem);
                 pinnedButtons++;
+                continue;
+            }
+
+            if (IsPinnedButton(button))
+            {
+                DebugLogger.WriteIfChanged(
+                    $"taskbar-explorer-pinned-skip-{button.RuntimeId}",
+                    "Explorer pinned button was not emitted: " +
+                    $"Button={button.Name} AppId={GetAutomationAppId(button.AutomationId)} " +
+                    $"AlreadyEmitted={string.Join(" | ", emittedGroupKeys.Take(16))}");
             }
         }
 
@@ -184,23 +234,40 @@ internal static class ExplorerTaskbarSnapshotStore
         DebugLogger.WriteIfChanged(
             "taskbar-explorer-order-merge",
             "Taskbar Explorer order merge: " +
-            $"Windows={windowItems.Count} Buttons={buttons.Length} MatchedButtons={matchedButtons} PinnedButtons={pinnedButtons} Output={merged.Count} " +
+            $"Windows={windowItems.Count} Buttons={buttons.Length} MatchedButtons={matchedButtons} PinnedButtons={pinnedButtons} IncludePinnedOnly={includePinnedOnly} Output={merged.Count} " +
             $"Order={string.Join(" | ", merged.Take(32).Select(item => $"{item.Title}:{item.GroupKey}"))}");
         return true;
     }
 
-    private static IEnumerable<ExplorerTaskbarButtonItem> GetVisualButtonOrder(IEnumerable<ExplorerTaskbarButtonItem> buttons)
+    private static IReadOnlyList<ExplorerTaskbarButtonItem> SelectPrimaryTaskbarButtonSequence(
+        IReadOnlyList<ExplorerTaskbarButtonItem> buttons)
     {
-        return buttons
-            .OrderBy(button => string.Equals(button.RootClassName, "Shell_TrayWnd", StringComparison.Ordinal) ? 0 : 1)
-            .ThenBy(button => button.Left)
+        if (buttons.Count == 0)
+        {
+            return buttons;
+        }
+
+        var primaryGroup = buttons
+            .GroupBy(button => button.RootHwnd)
+            .Where(group => group.Any(button => string.Equals(button.RootClassName, "Shell_TrayWnd", StringComparison.Ordinal)))
+            .OrderByDescending(group => group.Count())
+            .FirstOrDefault();
+        var selectedGroup = primaryGroup ?? buttons
+            .GroupBy(button => button.RootHwnd)
+            .OrderByDescending(group => group.Count())
+            .First();
+
+        return selectedGroup
+            .OrderBy(button => button.Left)
             .ThenBy(button => button.Top)
-            .ThenBy(button => button.Right);
+            .ThenBy(button => button.Right)
+            .ToArray();
     }
 
     private static IReadOnlyList<TaskbarItem> MergePinnedOrder(
         IReadOnlyList<TaskbarItem> windowItems,
-        IReadOnlyList<TaskbarItem> pinnedItems)
+        IReadOnlyList<TaskbarItem> pinnedItems,
+        bool includePinnedOnly)
     {
         var windowGroups = windowItems
             .GroupBy(item => item.GroupKey, StringComparer.OrdinalIgnoreCase)
@@ -224,7 +291,7 @@ internal static class ExplorerTaskbarSnapshotStore
                 continue;
             }
 
-            if (emittedGroupKeys.Add(pinnedItem.GroupKey))
+            if (includePinnedOnly && emittedGroupKeys.Add(pinnedItem.GroupKey))
             {
                 merged.Add(pinnedItem);
             }
@@ -260,24 +327,35 @@ internal static class ExplorerTaskbarSnapshotStore
             }
         }
 
-        var scored = windowGroups
-            .Where(group => !usedWindowGroupKeys.Contains(group[0].GroupKey))
-            .Select(group => new { Group = group, Score = ScorePinnedToWindowGroup(pinnedItem, group) })
-            .Where(candidate => candidate.Score >= 60)
-            .OrderByDescending(candidate => candidate.Score)
-            .ToArray();
-
-        if (scored.Length == 0)
+        TaskbarItem[]? bestGroup = null;
+        var bestScore = 0;
+        var tied = false;
+        foreach (var group in windowGroups)
         {
-            return null;
+            if (usedWindowGroupKeys.Contains(group[0].GroupKey))
+            {
+                continue;
+            }
+
+            var score = ScorePinnedToWindowGroup(pinnedItem, group);
+            if (score < 60)
+            {
+                continue;
+            }
+
+            if (score > bestScore)
+            {
+                bestGroup = group;
+                bestScore = score;
+                tied = false;
+            }
+            else if (score == bestScore)
+            {
+                tied = true;
+            }
         }
 
-        if (scored.Length > 1 && scored[0].Score == scored[1].Score)
-        {
-            return null;
-        }
-
-        return scored[0].Group;
+        return tied ? null : bestGroup;
     }
 
     private static TaskbarItem[]? FindMatchingWindowGroup(
@@ -285,28 +363,83 @@ internal static class ExplorerTaskbarSnapshotStore
         ExplorerTaskbarButtonItem button,
         HashSet<string> usedWindowGroupKeys)
     {
-        var scored = windowGroups
-            .Where(group => !usedWindowGroupKeys.Contains(group[0].GroupKey))
-            .Select(group => new { Group = group, Score = ScoreButton(group, button) })
-            .Where(candidate => candidate.Score >= 60)
-            .OrderByDescending(candidate => candidate.Score)
-            .ToArray();
-
-        if (scored.Length == 0)
+        var context = CreateButtonScoreContext(button);
+        TaskbarItem[]? bestGroup = null;
+        var bestScore = 0;
+        var tied = false;
+        foreach (var group in windowGroups)
         {
-            return null;
+            if (usedWindowGroupKeys.Contains(group[0].GroupKey))
+            {
+                continue;
+            }
+
+            var score = ScoreButton(group, context);
+            if (score < 60)
+            {
+                continue;
+            }
+
+            if (score > bestScore)
+            {
+                bestGroup = group;
+                bestScore = score;
+                tied = false;
+            }
+            else if (score == bestScore)
+            {
+                tied = true;
+            }
         }
 
-        if (scored.Length > 1 && scored[0].Score == scored[1].Score)
+        if (tied)
         {
             DebugLogger.WriteIfChanged(
                 $"taskbar-explorer-order-ambiguous-{button.RuntimeId}",
                 "Explorer taskbar order match skipped because multiple groups scored equally: " +
-                $"Button={button.Name} Score={scored[0].Score} Groups={string.Join(" | ", scored.Take(4).Select(candidate => candidate.Group[0].GroupKey))}");
+                $"Button={button.Name} Score={bestScore}");
             return null;
         }
 
-        return scored[0].Group;
+        return bestGroup;
+    }
+
+    private static TaskbarItem[]? FindExactMatchingWindowGroup(
+        IReadOnlyList<TaskbarItem[]> windowGroups,
+        ExplorerTaskbarButtonItem button,
+        HashSet<string> usedWindowGroupKeys)
+    {
+        var appId = GetAutomationAppId(button.AutomationId);
+        var normalizedAppId = Normalize(appId);
+        var normalizedPath = NormalizePathForCompare(ResolveExecutablePathFromAppId(appId));
+        foreach (var group in windowGroups)
+        {
+            if (usedWindowGroupKeys.Contains(group[0].GroupKey))
+            {
+                continue;
+            }
+
+            foreach (var item in group)
+            {
+                var itemAppId = Normalize(item.AppUserModelId);
+                if (normalizedAppId.Length > 0 &&
+                    itemAppId.Length > 0 &&
+                    string.Equals(normalizedAppId, itemAppId, StringComparison.Ordinal))
+                {
+                    return group;
+                }
+
+                var itemPath = NormalizePathForCompare(item.ProcessPath);
+                if (normalizedPath.Length > 0 &&
+                    itemPath.Length > 0 &&
+                    string.Equals(normalizedPath, itemPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return group;
+                }
+            }
+        }
+
+        return null;
     }
 
     private static int ScorePinnedToWindowGroup(TaskbarItem pinnedItem, IReadOnlyList<TaskbarItem> groupItems)
@@ -377,8 +510,8 @@ internal static class ExplorerTaskbarSnapshotStore
 
     public static bool TryForwardClick(IReadOnlyList<TaskbarItem> groupItems, bool rightClick, int anchorX, int anchorY)
     {
-        if ((!AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook &&
-             !AppSettingsService.Current.EnableExperimentalExplorerTaskbarMenuProxy) ||
+        if (rightClick ||
+            !AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook ||
             groupItems.Count == 0)
         {
             return false;
@@ -403,54 +536,21 @@ internal static class ExplorerTaskbarSnapshotStore
         }
 
         var groupKey = BuildGroupKey(groupItems);
-        if (!rightClick)
-        {
-            if (!AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook)
-            {
-                return false;
-            }
-
-            if (TrySendTaskbarButtonCommand(match, "ActivateTaskbarButton", anchorX, anchorY, out var activateDetail, responseTimeoutMs: 1200))
-            {
-                DebugLogger.WriteIfChanged(
-                    $"explorer-taskbar-activate-sent-{groupKey}",
-                    "Explorer taskbar activate proxy handled: " +
-                    $"Group={groupKey} Button={match.Name} RuntimeId={match.RuntimeId} Root=0x{match.RootHwnd.ToInt64():X} Detail={activateDetail}");
-                return true;
-            }
-
-            DebugLogger.WriteIfChanged(
-                $"explorer-taskbar-activate-failed-{groupKey}",
-                "Explorer taskbar activate proxy failed; falling back to direct window activation: " +
-                $"Group={groupKey} Button={match.Name} Error={activateDetail}");
-            RequestProxyRefresh($"activate failed for {groupKey}: {activateDetail}");
-            return false;
-        }
-
-        if (!AppSettingsService.Current.EnableExperimentalExplorerTaskbarMenuProxy)
+        if (TrySendTaskbarButtonCommand(match, "ActivateTaskbarButton", anchorX, anchorY, out var activateDetail, responseTimeoutMs: 1200))
         {
             DebugLogger.WriteIfChanged(
-                $"explorer-taskbar-context-menu-disabled-{groupKey}",
-                "Explorer taskbar context-menu proxy disabled by setting: " +
-                $"Group={BuildGroupKey(groupItems)} Button={match.Name}");
-            return false;
-        }
-
-        if (!TrySendTaskbarButtonCommand(match, "ShowTaskbarContextMenu", anchorX, anchorY, out var contextError))
-        {
-            DebugLogger.WriteIfChanged(
-                $"explorer-taskbar-context-menu-send-failed-{groupKey}",
-                "Explorer taskbar context-menu proxy send failed: " +
-                $"Group={groupKey} Button={match.Name} Anchor={anchorX},{anchorY} Error={contextError}");
-            RequestProxyRefresh($"context menu failed for {groupKey}: {contextError}");
-            return false;
+                $"explorer-taskbar-activate-sent-{groupKey}",
+                "Explorer taskbar activate proxy handled: " +
+                $"Group={groupKey} Button={match.Name} RuntimeId={match.RuntimeId} Root=0x{match.RootHwnd.ToInt64():X} Detail={activateDetail}");
+            return true;
         }
 
         DebugLogger.WriteIfChanged(
-            $"explorer-taskbar-context-menu-sent-{groupKey}",
-            "Explorer taskbar context-menu proxy sent: " +
-            $"Group={groupKey} Button={match.Name} RuntimeId={match.RuntimeId} Root=0x{match.RootHwnd.ToInt64():X} Anchor={anchorX},{anchorY} Detail={contextError}");
-        return true;
+            $"explorer-taskbar-activate-failed-{groupKey}",
+            "Explorer taskbar activate proxy failed; falling back to direct window activation: " +
+            $"Group={groupKey} Button={match.Name} Error={activateDetail}");
+        RequestProxyRefresh($"activate failed for {groupKey}: {activateDetail}");
+        return false;
     }
 
     public static void InvalidateButtonImage(IReadOnlyList<TaskbarItem> groupItems, string reason)
@@ -488,7 +588,9 @@ internal static class ExplorerTaskbarSnapshotStore
     public static bool TryGetButtonImage(IReadOnlyList<TaskbarItem> groupItems, out ExplorerTaskbarButtonImage image)
     {
         image = default;
-        if (!AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook || groupItems.Count == 0)
+        if (!AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook ||
+            !AppSettingsService.Current.EnableExperimentalExplorerTaskbarButtonImageCapture ||
+            groupItems.Count == 0)
         {
             return false;
         }
@@ -549,53 +651,69 @@ internal static class ExplorerTaskbarSnapshotStore
         IReadOnlyList<TaskbarItem> groupItems,
         IReadOnlyList<ExplorerTaskbarButtonItem> buttons)
     {
-        var scored = buttons
-            .Select(button => new ScoredExplorerButton(button, ScoreButton(groupItems, button)))
-            .Where(scoredButton => scoredButton.Score >= 60)
-            .OrderByDescending(scoredButton => scoredButton.Score)
-            .ToArray();
-
-        if (scored.Length == 0)
+        ExplorerTaskbarButtonItem? bestButton = null;
+        var bestScore = 0;
+        var tied = false;
+        foreach (var button in buttons)
         {
-            return null;
+            var score = ScoreButton(groupItems, CreateButtonScoreContext(button));
+            if (score < 60)
+            {
+                continue;
+            }
+
+            if (score > bestScore)
+            {
+                bestButton = button;
+                bestScore = score;
+                tied = false;
+            }
+            else if (score == bestScore)
+            {
+                tied = true;
+            }
         }
 
-        if (scored.Length > 1 && scored[0].Score == scored[1].Score)
-        {
-            return null;
-        }
-
-        return scored[0].Button;
+        return tied ? null : bestButton;
     }
 
-    private static int ScoreButton(IReadOnlyList<TaskbarItem> groupItems, ExplorerTaskbarButtonItem button)
+    private static ButtonScoreContext CreateButtonScoreContext(ExplorerTaskbarButtonItem button)
     {
         var buttonName = Normalize(CleanTaskbarButtonTitle(button.Name));
         var rawButtonName = Normalize(button.Name);
-        if (buttonName.Length == 0 && rawButtonName.Length == 0)
+        var buttonAppId = GetAutomationAppId(button.AutomationId);
+        var normalizedButtonAppId = Normalize(buttonAppId);
+        return new ButtonScoreContext(
+            buttonName,
+            rawButtonName,
+            buttonAppId,
+            normalizedButtonAppId,
+            NormalizePathForCompare(ResolveExecutablePathFromAppId(buttonAppId)),
+            SplitTokens(buttonAppId).ToArray());
+    }
+
+    private static int ScoreButton(IReadOnlyList<TaskbarItem> groupItems, ButtonScoreContext context)
+    {
+        if (context.ButtonName.Length == 0 && context.RawButtonName.Length == 0)
         {
             return 0;
         }
 
-        var buttonAppId = GetAutomationAppId(button.AutomationId);
-        var normalizedButtonAppId = Normalize(buttonAppId);
-        var buttonProcessPath = ResolveExecutablePathFromAppId(buttonAppId);
-        var normalizedButtonProcessPath = NormalizePathForCompare(buttonProcessPath);
         var best = 0;
         foreach (var item in groupItems)
         {
             var itemPath = NormalizePathForCompare(item.ProcessPath);
-            if (normalizedButtonProcessPath.Length > 0 &&
+            if (context.NormalizedButtonProcessPath.Length > 0 &&
                 itemPath.Length > 0 &&
-                string.Equals(normalizedButtonProcessPath, itemPath, StringComparison.OrdinalIgnoreCase))
+                string.Equals(context.NormalizedButtonProcessPath, itemPath, StringComparison.OrdinalIgnoreCase))
             {
                 best = Math.Max(best, 140);
             }
 
             var itemAppId = Normalize(item.AppUserModelId);
-            if (normalizedButtonAppId.Length > 0 &&
+            if (context.NormalizedButtonAppId.Length > 0 &&
                 itemAppId.Length > 0 &&
-                string.Equals(normalizedButtonAppId, itemAppId, StringComparison.Ordinal))
+                string.Equals(context.NormalizedButtonAppId, itemAppId, StringComparison.Ordinal))
             {
                 best = Math.Max(best, 135);
             }
@@ -603,16 +721,16 @@ internal static class ExplorerTaskbarSnapshotStore
             var title = Normalize(item.Title);
             if (title.Length >= 6)
             {
-                if (buttonName.Equals(title, StringComparison.Ordinal) ||
-                    rawButtonName.Equals(title, StringComparison.Ordinal))
+                if (context.ButtonName.Equals(title, StringComparison.Ordinal) ||
+                    context.RawButtonName.Equals(title, StringComparison.Ordinal))
                 {
                     best = Math.Max(best, 120);
                 }
-                else if (buttonName.Contains(title) || rawButtonName.Contains(title))
+                else if (context.ButtonName.Contains(title) || context.RawButtonName.Contains(title))
                 {
                     best = Math.Max(best, 100);
                 }
-                else if (title.Contains(buttonName) && buttonName.Length >= 6)
+                else if (title.Contains(context.ButtonName) && context.ButtonName.Length >= 6)
                 {
                     best = Math.Max(best, 80);
                 }
@@ -620,14 +738,14 @@ internal static class ExplorerTaskbarSnapshotStore
 
             var processName = Normalize(Path.GetFileNameWithoutExtension(item.ProcessName));
             if (processName.Length >= 4 &&
-                (buttonName.Contains(processName) || rawButtonName.Contains(processName)))
+                (context.ButtonName.Contains(processName) || context.RawButtonName.Contains(processName)))
             {
                 best = Math.Max(best, 75);
             }
 
             foreach (var alias in GetProcessAliases(processName))
             {
-                if (buttonName.Contains(alias) || rawButtonName.Contains(alias))
+                if (context.ButtonName.Contains(alias) || context.RawButtonName.Contains(alias))
                 {
                     best = Math.Max(best, 85);
                 }
@@ -635,15 +753,15 @@ internal static class ExplorerTaskbarSnapshotStore
 
             foreach (var token in SplitTokens(item.AppUserModelId))
             {
-                if (buttonName.Contains(token) ||
-                    rawButtonName.Contains(token) ||
-                    normalizedButtonAppId.Contains(token))
+                if (context.ButtonName.Contains(token) ||
+                    context.RawButtonName.Contains(token) ||
+                    context.NormalizedButtonAppId.Contains(token))
                 {
                     best = Math.Max(best, 65);
                 }
             }
 
-            foreach (var token in SplitTokens(buttonAppId))
+            foreach (var token in context.ButtonAppIdTokens)
             {
                 if (title.Contains(token) || processName.Contains(token) || itemAppId.Contains(token))
                 {
@@ -735,6 +853,13 @@ internal static class ExplorerTaskbarSnapshotStore
         return name.EndsWith(" pinned", StringComparison.Ordinal);
     }
 
+    private static bool IsPinnedOnlyButton(ExplorerTaskbarButtonItem button)
+    {
+        var name = Normalize(button.Name);
+        return name.EndsWith(" pinned", StringComparison.Ordinal) &&
+               !name.Contains(" running window", StringComparison.Ordinal);
+    }
+
     private static string CleanTaskbarButtonTitle(string name)
     {
         var title = name.Trim();
@@ -756,7 +881,10 @@ internal static class ExplorerTaskbarSnapshotStore
         return title;
     }
 
-    private static bool TryCreatePinnedItem(ExplorerTaskbarButtonItem button, out TaskbarItem item)
+    private static bool TryCreatePinnedItem(
+        ExplorerTaskbarButtonItem button,
+        IReadOnlyDictionary<string, TaskbarItem> pinnedShortcutsByTitle,
+        out TaskbarItem item)
     {
         item = default!;
         var appId = GetAutomationAppId(button.AutomationId);
@@ -766,11 +894,12 @@ internal static class ExplorerTaskbarSnapshotStore
             return false;
         }
 
-        var shortcutItem = FindMatchingPinnedShortcut(title);
+        pinnedShortcutsByTitle.TryGetValue(Normalize(title), out var shortcutItem);
+        var packageInfo = PackageAppResolver.Resolve(appId);
         var processPath = ResolveExecutablePathFromAppId(appId);
         if (string.IsNullOrWhiteSpace(processPath))
         {
-            processPath = shortcutItem?.ProcessPath ?? "";
+            processPath = packageInfo?.ExecutablePath ?? shortcutItem?.ProcessPath ?? "";
         }
 
         var processName = GetProcessName(processPath, appId, title);
@@ -782,10 +911,11 @@ internal static class ExplorerTaskbarSnapshotStore
         }
 
         var groupKey = GetPinnedGroupKey(appId, processPath, processName);
-        var icon = CreatePinnedImageSource(button.ButtonIconPngBytes) ?? shortcutItem?.Icon;
-        var fingerprint = string.IsNullOrWhiteSpace(button.ButtonIconFingerprint)
-            ? button.RuntimeId
-            : button.ButtonIconFingerprint;
+        var iconPath = FirstNonEmpty(shortcutItem?.IconPath, packageInfo?.IconPath, processPath);
+        var icon = AppSettingsService.Current.EnableExperimentalExplorerTaskbarButtonImageCapture
+            ? CreatePinnedImageSource(button.ButtonIconPngBytes) ?? shortcutItem?.Icon ?? PackageAppResolver.CreateImageSource(packageInfo?.IconPath)
+            : shortcutItem?.Icon ?? PackageAppResolver.CreateImageSource(packageInfo?.IconPath);
+        var fingerprint = GetPinnedIconFingerprint(button, iconPath, appId);
 
         item = new TaskbarItem(
             IntPtr.Zero,
@@ -800,18 +930,43 @@ internal static class ExplorerTaskbarSnapshotStore
             processPath,
             appId,
             groupKey,
-            shortcutItem?.IconPath ?? processPath,
+            iconPath,
             shortcutItem?.LaunchPath ?? processPath,
             shortcutItem?.LaunchArguments ?? "",
             shortcutItem?.LaunchWorkingDirectory ?? "");
         return true;
     }
 
-    private static TaskbarItem? FindMatchingPinnedShortcut(string title)
+    private static string GetPinnedIconFingerprint(ExplorerTaskbarButtonItem button, string iconPath, string appId)
     {
-        var normalizedTitle = Normalize(title);
-        return PinnedTaskbarShortcutProvider.GetPinnedItems()
-            .FirstOrDefault(item => string.Equals(Normalize(item.Title), normalizedTitle, StringComparison.Ordinal));
+        if (!string.IsNullOrWhiteSpace(button.ButtonIconFingerprint))
+        {
+            return button.ButtonIconFingerprint;
+        }
+
+        var fileFingerprint = PackageAppResolver.GetFileFingerprint(iconPath);
+        if (!string.IsNullOrWhiteSpace(fileFingerprint))
+        {
+            return $"pin:{appId}:{fileFingerprint}";
+        }
+
+        return string.IsNullOrWhiteSpace(button.RuntimeId)
+            ? $"pin:{appId}"
+            : button.RuntimeId;
+    }
+
+    private static string FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "";
+
+    private static IReadOnlyDictionary<string, TaskbarItem> GetPinnedShortcutsByTitle()
+    {
+        var result = new Dictionary<string, TaskbarItem>(StringComparer.Ordinal);
+        foreach (var item in PinnedTaskbarShortcutProvider.GetPinnedItems())
+        {
+            result.TryAdd(Normalize(item.Title), item);
+        }
+
+        return result;
     }
 
     private static string GetAutomationAppId(string automationId)
@@ -866,6 +1021,30 @@ internal static class ExplorerTaskbarSnapshotStore
             return "";
         }
 
+        lock (Sync)
+        {
+            if (ResolvedExecutablePathByAppId.TryGetValue(appId, out var cachedPath))
+            {
+                return cachedPath;
+            }
+        }
+
+        var resolvedPath = ResolveExecutablePathFromAppIdUncached(appId);
+        lock (Sync)
+        {
+            ResolvedExecutablePathByAppId[appId] = resolvedPath;
+        }
+
+        return resolvedPath;
+    }
+
+    private static string ResolveExecutablePathFromAppIdUncached(string appId)
+    {
+        if (string.IsNullOrWhiteSpace(appId))
+        {
+            return "";
+        }
+
         var replacements = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["{6D809377-6AF0-444B-8957-A3773F02200E}"] = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
@@ -885,6 +1064,12 @@ internal static class ExplorerTaskbarSnapshotStore
         if (Path.IsPathRooted(appId))
         {
             return appId;
+        }
+
+        var packageInfo = PackageAppResolver.Resolve(appId);
+        if (!string.IsNullOrWhiteSpace(packageInfo?.ExecutablePath))
+        {
+            return packageInfo.ExecutablePath;
         }
 
         return Normalize(appId) switch
@@ -1098,6 +1283,243 @@ internal static class ExplorerTaskbarSnapshotStore
         SnapshotChanged?.Invoke(null, EventArgs.Empty);
     }
 
+    private static void RefreshAutomationSnapshotIfHookIsStale()
+    {
+        var now = DateTimeOffset.UtcNow;
+        lock (Sync)
+        {
+            if (now - _lastHookSnapshot < HookSnapshotFreshDuration ||
+                now - _lastAutomationRefreshAttempt < AutomationRefreshInterval)
+            {
+                return;
+            }
+
+            _lastAutomationRefreshAttempt = now;
+        }
+
+        var buttons = ReadAutomationTaskbarButtons();
+        if (buttons.Count == 0)
+        {
+            DebugLogger.WriteIfChanged(
+                "explorer-taskbar-automation-empty",
+                "Explorer taskbar automation fallback found no usable app buttons.");
+            return;
+        }
+
+        var signature = string.Join(
+            "|",
+            buttons.Select(button => $"{button.RootHwnd.ToInt64():X}:{button.RuntimeId}:{button.Name}:{button.Left},{button.Top},{button.Right},{button.Bottom}"));
+
+        lock (Sync)
+        {
+            if (DateTimeOffset.UtcNow - _lastHookSnapshot < HookSnapshotFreshDuration ||
+                string.Equals(signature, _lastAutomationSignature, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            Buttons = buttons;
+            _lastAutomationSignature = signature;
+        }
+
+        DebugLogger.WriteIfChanged(
+            "explorer-taskbar-automation-order",
+            "Explorer taskbar automation fallback order: " +
+            $"Buttons={buttons.Count} Items={string.Join(" || ", buttons.Take(24).Select(FormatButtonForLog))}");
+    }
+
+    private static IReadOnlyList<ExplorerTaskbarButtonItem> ReadAutomationTaskbarButtons()
+    {
+        try
+        {
+            var buttons = new List<ExplorerTaskbarButtonItem>();
+            foreach (var root in FindTaskbarRootWindows())
+            {
+                AutomationElement? rootElement;
+                try
+                {
+                    rootElement = AutomationElement.FromHandle(root.Hwnd);
+                }
+                catch (Exception exception) when (exception is ElementNotAvailableException or InvalidOperationException or COMException)
+                {
+                    continue;
+                }
+
+                if (rootElement is null)
+                {
+                    continue;
+                }
+
+                var visited = 0;
+                CollectAutomationButtons(rootElement, root, buttons, depth: 0, ref visited);
+                if (buttons.Count >= AutomationMaxButtons)
+                {
+                    break;
+                }
+            }
+
+            return SelectPrimaryTaskbarButtonSequence(buttons);
+        }
+        catch (Exception exception) when (exception is ElementNotAvailableException or InvalidOperationException or COMException)
+        {
+            DebugLogger.WriteIfChanged(
+                "explorer-taskbar-automation-error",
+                $"Explorer taskbar automation fallback failed: {exception.GetType().Name}: {exception.Message}");
+            return Array.Empty<ExplorerTaskbarButtonItem>();
+        }
+    }
+
+    private static void CollectAutomationButtons(
+        AutomationElement element,
+        TaskbarRootWindow root,
+        List<ExplorerTaskbarButtonItem> buttons,
+        int depth,
+        ref int visited)
+    {
+        if (depth > AutomationMaxDepth || visited >= AutomationMaxNodes || buttons.Count >= AutomationMaxButtons)
+        {
+            return;
+        }
+
+        visited++;
+        TryAddAutomationButton(element, root, buttons);
+
+        AutomationElement? child;
+        try
+        {
+            child = TreeWalker.RawViewWalker.GetFirstChild(element);
+        }
+        catch (Exception exception) when (exception is ElementNotAvailableException or InvalidOperationException or COMException)
+        {
+            return;
+        }
+
+        while (child is not null && visited < AutomationMaxNodes && buttons.Count < AutomationMaxButtons)
+        {
+            CollectAutomationButtons(child, root, buttons, depth + 1, ref visited);
+            try
+            {
+                child = TreeWalker.RawViewWalker.GetNextSibling(child);
+            }
+            catch (Exception exception) when (exception is ElementNotAvailableException or InvalidOperationException or COMException)
+            {
+                return;
+            }
+        }
+    }
+
+    private static void TryAddAutomationButton(
+        AutomationElement element,
+        TaskbarRootWindow root,
+        List<ExplorerTaskbarButtonItem> buttons)
+    {
+        AutomationElement.AutomationElementInformation current;
+        try
+        {
+            current = element.Current;
+        }
+        catch (Exception exception) when (exception is ElementNotAvailableException or InvalidOperationException or COMException)
+        {
+            return;
+        }
+
+        if (!IsAutomationTaskbarButton(current))
+        {
+            return;
+        }
+
+        var rect = current.BoundingRectangle;
+        if (rect.IsEmpty || rect.Width <= 0 || rect.Height <= 0)
+        {
+            return;
+        }
+
+        buttons.Add(new ExplorerTaskbarButtonItem(
+            GetAutomationRuntimeId(element),
+            current.Name ?? "",
+            current.ClassName ?? "",
+            current.AutomationId ?? "",
+            current.ControlType?.ProgrammaticName ?? "",
+            current.NativeWindowHandle,
+            root.Hwnd,
+            root.ClassName,
+            (int)Math.Round(rect.Left),
+            (int)Math.Round(rect.Top),
+            (int)Math.Round(rect.Right),
+            (int)Math.Round(rect.Bottom),
+            null,
+            ""));
+    }
+
+    private static bool IsAutomationTaskbarButton(AutomationElement.AutomationElementInformation current)
+    {
+        var controlType = current.ControlType;
+        var className = current.ClassName ?? "";
+        var automationId = current.AutomationId ?? "";
+        var name = current.Name ?? "";
+
+        if (className.StartsWith("SystemTray.", StringComparison.Ordinal) ||
+            className.IndexOf("Tray", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return false;
+        }
+
+        if (ExcludedNamePrefixes.Any(prefix => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        if (controlType != ControlType.Button &&
+            controlType != ControlType.ListItem &&
+            controlType != ControlType.MenuItem)
+        {
+            return false;
+        }
+
+        return !string.IsNullOrWhiteSpace(name) ||
+               className.IndexOf("Task", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               automationId.IndexOf("Task", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static IReadOnlyList<TaskbarRootWindow> FindTaskbarRootWindows()
+    {
+        var roots = new List<TaskbarRootWindow>();
+        NativeMethods.EnumWindows((hwnd, _) =>
+        {
+            var className = GetWindowClassName(hwnd);
+            if (!TaskbarRootClasses.Contains(className, StringComparer.Ordinal))
+            {
+                return true;
+            }
+
+            NativeMethods.GetWindowRect(hwnd, out var rect);
+            roots.Add(new TaskbarRootWindow(hwnd, className, rect.Left, rect.Top, rect.Right, rect.Bottom));
+            return true;
+        }, IntPtr.Zero);
+
+        return roots;
+    }
+
+    private static string GetAutomationRuntimeId(AutomationElement element)
+    {
+        try
+        {
+            return string.Join(".", element.GetRuntimeId() ?? Array.Empty<int>());
+        }
+        catch (ElementNotAvailableException)
+        {
+            return "";
+        }
+    }
+
+    private static string GetWindowClassName(IntPtr hwnd)
+    {
+        var builder = new StringBuilder(256);
+        return NativeMethods.GetClassName(hwnd, builder, builder.Capacity) > 0
+            ? builder.ToString()
+            : "";
+    }
+
     private static string GetCommandPipeName() =>
         $"TaskBar2.ExplorerTaskbarCommand.{System.Diagnostics.Process.GetCurrentProcess().SessionId}";
 
@@ -1118,8 +1540,22 @@ internal static class ExplorerTaskbarSnapshotStore
         }
     }
 
-    private sealed record ScoredExplorerButton(ExplorerTaskbarButtonItem Button, int Score);
+    private sealed record ButtonScoreContext(
+        string ButtonName,
+        string RawButtonName,
+        string ButtonAppId,
+        string NormalizedButtonAppId,
+        string NormalizedButtonProcessPath,
+        string[] ButtonAppIdTokens);
 }
+
+internal sealed record TaskbarRootWindow(
+    IntPtr Hwnd,
+    string ClassName,
+    int Left,
+    int Top,
+    int Right,
+    int Bottom);
 
 internal sealed record ExplorerTaskbarButtonItem(
     string RuntimeId,

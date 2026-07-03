@@ -7,9 +7,13 @@ internal sealed class AppSettings
 {
     public bool ShowOnlyAppsOnThisMonitor { get; set; }
 
+    public bool MirrorPrimaryNotificationArea { get; set; } = true;
+
     public string TaskbarButtonAlignment { get; set; } = "Left";
 
     public double TaskbarScale { get; set; } = 1.0;
+
+    public Dictionary<string, MonitorTaskbarSettings> MonitorTaskbarSettings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public int TaskbarPollingIntervalMs { get; set; } = AppSettingsService.DefaultTaskbarPollingIntervalMs;
 
@@ -21,13 +25,24 @@ internal sealed class AppSettings
 
     public bool ShowAllTrayIcons { get; set; }
 
-    public bool UseNativeTaskbarRenderer { get; set; }
-
     public bool PauseNonClockUpdatesWhileFullscreen { get; set; }
 
-    public bool EnableExperimentalExplorerTaskbarHook { get; set; }
+    public bool EnableExperimentalExplorerTaskbarHook { get; set; } = true;
 
-    public bool EnableExperimentalExplorerTaskbarMenuProxy { get; set; }
+    public bool EnableExperimentalExplorerTaskbarButtonImageCapture { get; set; }
+}
+
+internal sealed class MonitorTaskbarSettings
+{
+    public bool ShowOnlyAppsOnThisMonitor { get; set; }
+
+    public bool MirrorPrimaryNotificationArea { get; set; } = true;
+
+    public bool ShowClock { get; set; } = true;
+
+    public string TaskbarButtonAlignment { get; set; } = "Left";
+
+    public double TaskbarScale { get; set; } = 1.0;
 }
 
 internal static class AppSettingsService
@@ -48,6 +63,51 @@ internal static class AppSettingsService
     public static event EventHandler? SettingsChanged;
 
     public static AppSettings Current { get; private set; } = Load();
+
+    public static MonitorTaskbarSettings GetMonitorTaskbarSettings(string monitorDeviceName)
+    {
+        if (!string.IsNullOrWhiteSpace(monitorDeviceName) &&
+            Current.MonitorTaskbarSettings.TryGetValue(monitorDeviceName, out var monitorSettings))
+        {
+            return CloneMonitorTaskbarSettings(monitorSettings);
+        }
+
+        return new MonitorTaskbarSettings
+        {
+            ShowOnlyAppsOnThisMonitor = Current.ShowOnlyAppsOnThisMonitor,
+            MirrorPrimaryNotificationArea = Current.MirrorPrimaryNotificationArea,
+            ShowClock = true,
+            TaskbarButtonAlignment = Current.TaskbarButtonAlignment,
+            TaskbarScale = Current.TaskbarScale
+        };
+    }
+
+    public static bool ShouldMirrorNotificationAreaOnAnyMonitor(IEnumerable<string> monitorDeviceNames)
+    {
+        foreach (var monitorDeviceName in monitorDeviceNames)
+        {
+            if (GetMonitorTaskbarSettings(monitorDeviceName).MirrorPrimaryNotificationArea)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static void SetMonitorTaskbarSettings(
+        AppSettings settings,
+        string monitorDeviceName,
+        MonitorTaskbarSettings monitorSettings)
+    {
+        if (string.IsNullOrWhiteSpace(monitorDeviceName))
+        {
+            return;
+        }
+
+        Normalize(monitorSettings);
+        settings.MonitorTaskbarSettings[monitorDeviceName] = CloneMonitorTaskbarSettings(monitorSettings);
+    }
 
     public static void Update(Action<AppSettings> update)
     {
@@ -78,21 +138,18 @@ internal static class AppSettingsService
 
     private static void Normalize(AppSettings settings)
     {
-        if (!string.Equals(settings.TaskbarButtonAlignment, "Center", StringComparison.OrdinalIgnoreCase))
-        {
-            settings.TaskbarButtonAlignment = "Left";
-        }
-        else
-        {
-            settings.TaskbarButtonAlignment = "Center";
-        }
-
-        if (double.IsNaN(settings.TaskbarScale) || settings.TaskbarScale <= 0)
-        {
-            settings.TaskbarScale = 1.0;
-        }
-
-        settings.TaskbarScale = Math.Clamp(settings.TaskbarScale, MinTaskbarScale, MaxTaskbarScale);
+        settings.TaskbarButtonAlignment = NormalizeAlignment(settings.TaskbarButtonAlignment);
+        settings.TaskbarScale = NormalizeScale(settings.TaskbarScale);
+        settings.MonitorTaskbarSettings ??= new Dictionary<string, MonitorTaskbarSettings>(StringComparer.OrdinalIgnoreCase);
+        settings.MonitorTaskbarSettings = new Dictionary<string, MonitorTaskbarSettings>(
+            settings.MonitorTaskbarSettings
+                .Where(pair => !string.IsNullOrWhiteSpace(pair.Key))
+                .Select(pair =>
+                {
+                    Normalize(pair.Value);
+                    return pair;
+                }),
+            StringComparer.OrdinalIgnoreCase);
 
         settings.TaskbarPollingIntervalMs = NormalizeInterval(
             settings.TaskbarPollingIntervalMs,
@@ -111,6 +168,32 @@ internal static class AppSettingsService
 
         return Math.Clamp(value, MinPollingIntervalMs, MaxPollingIntervalMs);
     }
+
+    private static void Normalize(MonitorTaskbarSettings settings)
+    {
+        settings.TaskbarButtonAlignment = NormalizeAlignment(settings.TaskbarButtonAlignment);
+        settings.TaskbarScale = NormalizeScale(settings.TaskbarScale);
+    }
+
+    private static string NormalizeAlignment(string value) =>
+        string.Equals(value, "Center", StringComparison.OrdinalIgnoreCase)
+            ? "Center"
+            : "Left";
+
+    private static double NormalizeScale(double value) =>
+        double.IsNaN(value) || value <= 0
+            ? 1.0
+            : Math.Clamp(value, MinTaskbarScale, MaxTaskbarScale);
+
+    private static MonitorTaskbarSettings CloneMonitorTaskbarSettings(MonitorTaskbarSettings settings) =>
+        new()
+        {
+            ShowOnlyAppsOnThisMonitor = settings.ShowOnlyAppsOnThisMonitor,
+            MirrorPrimaryNotificationArea = settings.MirrorPrimaryNotificationArea,
+            ShowClock = settings.ShowClock,
+            TaskbarButtonAlignment = NormalizeAlignment(settings.TaskbarButtonAlignment),
+            TaskbarScale = NormalizeScale(settings.TaskbarScale)
+        };
 
     private static void Save()
     {

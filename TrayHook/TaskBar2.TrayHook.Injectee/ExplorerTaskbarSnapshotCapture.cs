@@ -20,13 +20,9 @@ internal static class ExplorerTaskbarSnapshotCapture
     private const int MaxDepth = 14;
     private const int MaxNodes = 600;
     private const int MaxButtons = 96;
-    private const uint WmContextMenu = 0x007B;
     private const uint WmLButtonDown = 0x0201;
     private const uint WmLButtonUp = 0x0202;
     private const int MkLButton = 0x0001;
-    private const uint SwpNoSize = 0x0001;
-    private const uint SwpNoZOrder = 0x0004;
-    private const uint SwpNoActivate = 0x0010;
     private static readonly string[] TaskbarRootClasses = ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
     private static readonly string[] ExcludedNamePrefixes =
     [
@@ -49,8 +45,9 @@ internal static class ExplorerTaskbarSnapshotCapture
     private static ManualResetEvent? _commandStopEvent;
     private static Thread? _commandThread;
     private static string _lastSignature = "";
+    private static bool _enableButtonImageCapture;
 
-    public static void StartIfExplorer()
+    public static void StartIfExplorer(bool enableButtonImageCapture)
     {
         if (!string.Equals(Process.GetCurrentProcess().ProcessName, "explorer", StringComparison.OrdinalIgnoreCase))
         {
@@ -59,6 +56,7 @@ internal static class ExplorerTaskbarSnapshotCapture
 
         lock (Sync)
         {
+            _enableButtonImageCapture = enableButtonImageCapture;
             if (_thread is not null)
             {
                 return;
@@ -206,15 +204,8 @@ internal static class ExplorerTaskbarSnapshotCapture
             return CreateCommandResponse(activateHandled, activateDetail);
         }
 
-        if (!string.Equals(command.Operation, "ShowTaskbarContextMenu", StringComparison.OrdinalIgnoreCase))
-        {
-            WriteLog($"Explorer taskbar command ignored: unsupported operation {command.Operation}");
-            return CreateCommandResponse(false, $"Unsupported operation {command.Operation}.");
-        }
-
-        var contextHandled = TryShowTaskbarContextMenu(command, out var contextDetail);
-        WriteLog($"Explorer taskbar context-menu command handled={contextHandled}. {contextDetail}");
-        return CreateCommandResponse(contextHandled, contextDetail);
+        WriteLog($"Explorer taskbar command ignored: unsupported operation {command.Operation}");
+        return CreateCommandResponse(false, $"Unsupported operation {command.Operation}.");
     }
 
     private static bool TryActivateTaskbarButton(ExplorerTaskbarMenuCommand command, out string detail)
@@ -250,50 +241,6 @@ internal static class ExplorerTaskbarSnapshotCapture
         detail =
             $"Taskbar activate failed. Button={match.Current.Name} Root=0x{match.Root.Hwnd.ToInt64():X} Invoke={invokeDetail} {postDetail}";
         return false;
-    }
-
-    private static bool TryShowTaskbarContextMenu(ExplorerTaskbarMenuCommand command, out string detail)
-    {
-        detail = "";
-        if (!UiaAdapter.TryEnsureLoaded(out var error))
-        {
-            detail = error;
-            return false;
-        }
-
-        var match = FindCommandTarget(command);
-        if (match is null)
-        {
-            detail =
-                $"No matching Explorer taskbar button. RuntimeId={command.RuntimeId} Name={command.Name} Root=0x{command.RootHwnd:X}";
-            return false;
-        }
-
-        var centerX = (match.Current.BoundingRectangle.Left + match.Current.BoundingRectangle.Right) / 2.0;
-        var centerY = (match.Current.BoundingRectangle.Top + match.Current.BoundingRectangle.Bottom) / 2.0;
-        var realX = (int)Math.Round(centerX);
-        var realY = (int)Math.Round(centerY);
-        var before = EnumeratePopupCandidates().ToDictionary(window => window.Hwnd);
-        var wParam = match.Current.NativeWindowHandle != 0
-            ? new IntPtr(match.Current.NativeWindowHandle)
-            : match.Root.Hwnd;
-        var posted = PostMessage(
-            match.Root.Hwnd,
-            WmContextMenu,
-            wParam,
-            MakeLParam(realX, realY));
-
-        if (!posted)
-        {
-            detail =
-                $"PostMessage failed. Root=0x{match.Root.Hwnd.ToInt64():X} Button={match.Current.Name} RealPoint={realX},{realY} LastError={Marshal.GetLastWin32Error()}";
-            return false;
-        }
-
-        var moved = TryMoveNewPopup(before, command.AnchorX, command.AnchorY, out var popupDetail);
-        detail =
-            $"Posted WM_CONTEXTMENU. Button={match.Current.Name} Root=0x{match.Root.Hwnd.ToInt64():X} RealPoint={realX},{realY} Anchor={command.AnchorX},{command.AnchorY} Moved={moved} {popupDetail}";
-        return moved;
     }
 
     private static string CreateCommandResponse(bool handled, string detail) =>
@@ -493,111 +440,6 @@ internal static class ExplorerTaskbarSnapshotCapture
                Math.Abs(bottom - command.Bottom) <= 4;
     }
 
-    private static bool TryMoveNewPopup(
-        IReadOnlyDictionary<IntPtr, PopupCandidate> before,
-        int anchorX,
-        int anchorY,
-        out string detail)
-    {
-        var deadline = DateTime.UtcNow.AddMilliseconds(1200);
-        while (DateTime.UtcNow < deadline)
-        {
-            var candidates = EnumeratePopupCandidates()
-                .Where(candidate => !before.ContainsKey(candidate.Hwnd))
-                .OrderBy(candidate => candidate.Area)
-                .ToArray();
-            var candidate = candidates.FirstOrDefault();
-            if (candidate is not null)
-            {
-                var newX = Math.Max(0, anchorX - 16);
-                var newY = anchorY - candidate.Height - 8;
-                if (newY < 0)
-                {
-                    newY = anchorY + 8;
-                }
-
-                var moved = SetWindowPos(
-                    candidate.Hwnd,
-                    IntPtr.Zero,
-                    newX,
-                    newY,
-                    0,
-                    0,
-                    SwpNoSize | SwpNoZOrder | SwpNoActivate);
-                detail =
-                    $"Popup=0x{candidate.Hwnd.ToInt64():X} Class={candidate.ClassName} Rect={candidate.Left},{candidate.Top},{candidate.Right},{candidate.Bottom} Target={newX},{newY} MoveLastError={Marshal.GetLastWin32Error()}";
-                return moved;
-            }
-
-            Thread.Sleep(30);
-        }
-
-        detail = "No new popup window detected after Explorer handled WM_CONTEXTMENU.";
-        return false;
-    }
-
-    private static IReadOnlyList<PopupCandidate> EnumeratePopupCandidates()
-    {
-        var processId = Process.GetCurrentProcess().Id;
-        var candidates = new List<PopupCandidate>();
-        EnumWindows((hwnd, _) =>
-        {
-            try
-            {
-                if (!IsWindowVisible(hwnd))
-                {
-                    return true;
-                }
-
-                GetWindowThreadProcessId(hwnd, out var windowProcessId);
-                if (windowProcessId != processId)
-                {
-                    return true;
-                }
-
-                var className = GetClassName(hwnd);
-                if (className == "Shell_TrayWnd" || className == "Shell_SecondaryTrayWnd")
-                {
-                    return true;
-                }
-
-                if (!IsPopupClassCandidate(className))
-                {
-                    return true;
-                }
-
-                if (!GetWindowRect(hwnd, out var rect))
-                {
-                    return true;
-                }
-
-                var width = rect.Right - rect.Left;
-                var height = rect.Bottom - rect.Top;
-                if (width < 80 || height < 40 || width > 1200 || height > 1200)
-                {
-                    return true;
-                }
-
-                candidates.Add(new PopupCandidate(hwnd, className, rect.Left, rect.Top, rect.Right, rect.Bottom));
-            }
-            catch
-            {
-            }
-
-            return true;
-        }, IntPtr.Zero);
-
-        return candidates;
-    }
-
-    private static bool IsPopupClassCandidate(string className) =>
-        string.Equals(className, "#32768", StringComparison.Ordinal) ||
-        className.IndexOf("Jump", StringComparison.OrdinalIgnoreCase) >= 0 ||
-        className.IndexOf("Popup", StringComparison.OrdinalIgnoreCase) >= 0 ||
-        className.IndexOf("Xaml", StringComparison.OrdinalIgnoreCase) >= 0 ||
-        className.IndexOf("ExplorerHost", StringComparison.OrdinalIgnoreCase) >= 0 ||
-        className.IndexOf("CoreWindow", StringComparison.OrdinalIgnoreCase) >= 0;
-
     private static void CaptureOnce()
     {
         var buttons = new List<ExplorerTaskbarButtonSnapshot>();
@@ -710,7 +552,10 @@ internal static class ExplorerTaskbarSnapshotCapture
             return;
         }
 
-        var buttonImage = CaptureButtonImage(current.BoundingRectangle);
+        var buttonImage = _enableButtonImageCapture
+            ? CaptureButtonImage(current.BoundingRectangle)
+            : ButtonImageCapture.Empty;
+
         buttons.Add(new ExplorerTaskbarButtonSnapshot(
             GetRuntimeId(element),
             current.Name ?? "",
@@ -1232,10 +1077,6 @@ internal static class ExplorerTaskbarSnapshotCapture
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
 
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool IsWindowVisible(IntPtr hWnd);
-
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
@@ -1250,20 +1091,6 @@ internal static class ExplorerTaskbarSnapshotCapture
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ScreenToClient(IntPtr hWnd, ref NativePoint lpPoint);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetWindowPos(
-        IntPtr hWnd,
-        IntPtr hWndInsertAfter,
-        int X,
-        int Y,
-        int cx,
-        int cy,
-        uint uFlags);
-
-    [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out int lpdwProcessId);
 
     private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
 
@@ -1312,37 +1139,6 @@ internal static class ExplorerTaskbarSnapshotCapture
         public object Element { get; }
 
         public UiaElementInfo Current { get; }
-    }
-
-    private sealed class PopupCandidate
-    {
-        public PopupCandidate(IntPtr hwnd, string className, int left, int top, int right, int bottom)
-        {
-            Hwnd = hwnd;
-            ClassName = className;
-            Left = left;
-            Top = top;
-            Right = right;
-            Bottom = bottom;
-        }
-
-        public IntPtr Hwnd { get; }
-
-        public string ClassName { get; }
-
-        public int Left { get; }
-
-        public int Top { get; }
-
-        public int Right { get; }
-
-        public int Bottom { get; }
-
-        public int Width => Right - Left;
-
-        public int Height => Bottom - Top;
-
-        public int Area => Math.Max(0, Width) * Math.Max(0, Height);
     }
 
     private sealed class ExplorerTaskbarMenuCommand

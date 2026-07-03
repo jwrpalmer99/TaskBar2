@@ -24,14 +24,14 @@ internal static class ChromiumJumpListProvider
         var mostVisited = GetMostVisited(browser, profiles);
 
         var result = new List<JumpListMenuSection>();
-        if (recentlyClosed.Count > 0)
-        {
-            result.Add(new JumpListMenuSection("Recently closed", recentlyClosed));
-        }
-
         if (mostVisited.Count > 0)
         {
             result.Add(new JumpListMenuSection("Most visited", mostVisited));
+        }
+
+        if (recentlyClosed.Count > 0)
+        {
+            result.Add(new JumpListMenuSection("Recently closed", recentlyClosed));
         }
 
         sections = result;

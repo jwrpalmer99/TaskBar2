@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+    <PackageReference Include="OpenMcdf" Version="3.1.4" />
     <PackageReference Include="Vortice.Direct2D1" Version="3.8.3" />
   </ItemGroup>
 

@@ -27,21 +27,73 @@ internal static class JumpListMenuProvider
         }
 
         var sections = new List<JumpListMenuSection>();
-        var tasks = GetStaticTasks(items);
-        if (tasks.Count > 0)
-        {
-            sections.Add(new JumpListMenuSection("Tasks", tasks));
-        }
+        var staticTasks = GetStaticTasks(items);
 
         if (ChromiumJumpListProvider.TryGetSections(items, out var chromiumSections))
         {
             sections.AddRange(chromiumSections);
+            if (staticTasks.Count > 0)
+            {
+                sections.Add(new JumpListMenuSection("Tasks", staticTasks));
+            }
+
+            return sections;
+        }
+
+        var customSections = ShellJumpListFileProvider.GetCustomDestinationSections(items);
+        if (customSections.Count > 0)
+        {
+            sections.AddRange(MergeStaticTasksIntoCustomSections(staticTasks, customSections));
+        }
+        else if (staticTasks.Count > 0)
+        {
+            sections.Add(new JumpListMenuSection("Tasks", staticTasks));
+        }
+
+        var fileDestinationSections = ShellJumpListFileProvider.GetAutomaticDestinationSections(items);
+        if (fileDestinationSections.Count > 0)
+        {
+            sections.AddRange(fileDestinationSections);
             return sections;
         }
 
         var destinationSections = GetDestinationSections(items);
         sections.AddRange(destinationSections);
         return sections;
+    }
+
+    private static IReadOnlyList<JumpListMenuSection> MergeStaticTasksIntoCustomSections(
+        IReadOnlyList<JumpListMenuEntry> staticTasks,
+        IReadOnlyList<JumpListMenuSection> customSections)
+    {
+        if (staticTasks.Count == 0)
+        {
+            return customSections;
+        }
+
+        var merged = new List<JumpListMenuSection>(customSections.Count + 1);
+        var addedStaticTasks = false;
+        foreach (var section in customSections)
+        {
+            if (section.Title.Equals("Tasks", StringComparison.OrdinalIgnoreCase))
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var entries = Deduplicate(section.Entries.Concat(staticTasks), seen);
+                merged.Add(new JumpListMenuSection(section.Title, entries));
+                addedStaticTasks = true;
+            }
+            else
+            {
+                merged.Add(section);
+            }
+        }
+
+        if (!addedStaticTasks)
+        {
+            merged.Add(new JumpListMenuSection("Tasks", staticTasks));
+        }
+
+        return merged;
     }
 
     private static IReadOnlyList<JumpListMenuSection> GetDestinationSections(IReadOnlyList<TaskbarItem> items)
@@ -82,7 +134,7 @@ internal static class JumpListMenuProvider
     }
 
     private static IReadOnlyList<JumpListMenuEntry> Deduplicate(
-        IReadOnlyList<JumpListMenuEntry> entries,
+        IEnumerable<JumpListMenuEntry> entries,
         HashSet<string> seen)
     {
         var result = new List<JumpListMenuEntry>();
@@ -119,9 +171,10 @@ internal static class JumpListMenuProvider
                 CreateLaunchEntry("New window", processPath, "--new-window"),
                 CreateLaunchEntry("New InPrivate window", processPath, "--inprivate")
             ],
-            "explorer" =>
+            "ms-teams" or "msteams" or "teams" =>
             [
-                CreateLaunchEntry("Open new File Explorer window", processPath, "")
+                CreateUriEntry("Schedule Meeting", "https://teams.microsoft.com/l/meeting/new"),
+                CreateUriEntry("New Message", "https://teams.microsoft.com/l/chat/0/0")
             ],
             _ => Array.Empty<JumpListMenuEntry>()
         };
@@ -131,6 +184,12 @@ internal static class JumpListMenuProvider
     {
         var key = $"launch:{path}|{arguments}";
         return new JumpListMenuEntry(title, key, () => Launch(path, arguments, Path.GetDirectoryName(path) ?? ""));
+    }
+
+    private static JumpListMenuEntry CreateUriEntry(string title, string uri)
+    {
+        var key = $"uri:{uri}";
+        return new JumpListMenuEntry(title, key, () => Launch(uri, "", ""));
     }
 
     private static IReadOnlyList<JumpListMenuEntry> GetDestinations(string appId, AppDocListType listType)

@@ -39,13 +39,15 @@ internal static class Program
                 options.AgentName,
                 options.PipeName,
                 options.StopEventName,
+                options.InjecteeStopEventName,
                 options.GlobalStopEventName,
                 shadowInjecteePath,
                 options.IntervalMs,
                 options.TargetMode,
                 options.ShowAllTrayIcons,
                 options.EnableTrayIconHook,
-                options.EnableExplorerTaskbarHook);
+                options.EnableExplorerTaskbarHook,
+                options.EnableExplorerTaskbarButtonImageCapture);
             agent.Run(stopEvent, globalStopEvent);
             return 0;
         }
@@ -107,6 +109,10 @@ internal static class HookPayloadShadowCopy
 
 internal sealed class HookAgent
 {
+    private const int StartupFastScanCount = 5;
+    private const int TrayIdleScanIntervalMs = 5000;
+    private const int ExplorerIdleScanIntervalMs = 15000;
+
     private static readonly HashSet<string> ExcludedProcessNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "Idle",
@@ -126,9 +132,11 @@ internal sealed class HookAgent
     private readonly string _pipeName;
     private readonly string _agentName;
     private readonly string _stopEventName;
+    private readonly string _injecteeStopEventName;
     private readonly string _globalStopEventName;
     private readonly string _injecteePath;
-    private readonly int _intervalMs;
+    private readonly int _activeScanIntervalMs;
+    private readonly int _idleScanIntervalMs;
     private readonly TargetMode _targetMode;
     private readonly TrayIconTargetCatalog _targetCatalog;
     private readonly int _currentProcessId = Process.GetCurrentProcess().Id;
@@ -139,55 +147,68 @@ internal sealed class HookAgent
     private readonly Dictionary<int, CachedProcessState> _processStateById = [];
     private readonly bool _enableTrayIconHook;
     private readonly bool _enableExplorerTaskbarHook;
+    private readonly bool _enableExplorerTaskbarButtonImageCapture;
     private DateTimeOffset _lastTaskbarCreatedBroadcast = DateTimeOffset.MinValue;
     private int _startupScanBroadcastsRemaining = 3;
+    private int _startupFastScansRemaining = StartupFastScanCount;
 
     public HookAgent(
         string agentName,
         string pipeName,
         string stopEventName,
+        string injecteeStopEventName,
         string globalStopEventName,
         string injecteePath,
         int intervalMs,
         TargetMode targetMode,
         bool showAllTrayIcons,
         bool enableTrayIconHook,
-        bool enableExplorerTaskbarHook)
+        bool enableExplorerTaskbarHook,
+        bool enableExplorerTaskbarButtonImageCapture)
     {
         _agentName = string.IsNullOrWhiteSpace(agentName) ? "agent" : agentName;
         _pipeName = pipeName;
         _stopEventName = stopEventName;
+        _injecteeStopEventName = string.IsNullOrWhiteSpace(injecteeStopEventName)
+            ? stopEventName
+            : injecteeStopEventName;
         _globalStopEventName = globalStopEventName;
-        _injecteePath = injecteePath;
-        _intervalMs = Math.Max(1000, intervalMs);
         _targetMode = targetMode;
         _targetCatalog = new TrayIconTargetCatalog(showAllTrayIcons);
         _enableTrayIconHook = enableTrayIconHook;
         _enableExplorerTaskbarHook = enableExplorerTaskbarHook;
+        _enableExplorerTaskbarButtonImageCapture = enableExplorerTaskbarButtonImageCapture;
+        _injecteePath = injecteePath;
+        _activeScanIntervalMs = Math.Max(1000, intervalMs);
+        _idleScanIntervalMs = Math.Max(
+            _activeScanIntervalMs,
+            _enableTrayIconHook ? TrayIdleScanIntervalMs : ExplorerIdleScanIntervalMs);
     }
 
     public void Run(WaitHandle stopEvent, WaitHandle globalStopEvent)
     {
-        AgentLog.Write($"Tray hook agent started. Agent={_agentName} ProcessId={_currentProcessId} Session={_sessionId} Pipe={_pipeName} Injectee={DescribeInjectee()} TargetMode={_targetMode} ShowAllTrayIcons={_targetCatalog.ShowAllTrayIcons} EnableTrayIconHook={_enableTrayIconHook} EnableExplorerTaskbarHook={_enableExplorerTaskbarHook}");
+        AgentLog.Write($"Tray hook agent started. Agent={_agentName} ProcessId={_currentProcessId} Session={_sessionId} Pipe={_pipeName} Injectee={DescribeInjectee()} TargetMode={_targetMode} ShowAllTrayIcons={_targetCatalog.ShowAllTrayIcons} EnableTrayIconHook={_enableTrayIconHook} EnableExplorerTaskbarHook={_enableExplorerTaskbarHook} EnableExplorerTaskbarButtonImageCapture={_enableExplorerTaskbarButtonImageCapture} ActiveScanInterval={_activeScanIntervalMs} IdleScanInterval={_idleScanIntervalMs}");
         var stopHandles = new[] { stopEvent, globalStopEvent };
         while (WaitHandle.WaitAny(stopHandles, 0) == WaitHandle.WaitTimeout)
         {
-            ScanOnce();
-            WaitHandle.WaitAny(stopHandles, _intervalMs);
+            var scanResult = ScanOnce();
+            WaitHandle.WaitAny(stopHandles, GetNextScanDelay(scanResult));
         }
 
         AgentLog.Write($"Tray hook agent stopping. Agent={_agentName}");
     }
 
-    private void ScanOnce()
+    private ScanResult ScanOnce()
     {
         if (_enableTrayIconHook)
         {
             _targetCatalog.RefreshIfNeeded();
         }
+
         var now = DateTimeOffset.UtcNow;
         var injectedCount = 0;
-        var processes = ProcessSnapshotProvider.GetProcesses();
+        var processNameFilter = BuildProcessNameFilter();
+        var processes = ProcessSnapshotProvider.GetProcesses(processNameFilter);
         PruneProcessState(processes);
         var candidates = processes
             .Where(process => IsCandidate(process, now))
@@ -211,6 +232,46 @@ internal sealed class HookAgent
         {
             BroadcastTaskbarCreated(injectedCount, force: startupBroadcast);
         }
+
+        var startupFastScan = _startupFastScansRemaining > 0;
+        if (_startupFastScansRemaining > 0)
+        {
+            _startupFastScansRemaining--;
+        }
+
+        return new ScanResult(candidates.Length, injectedCount, startupBroadcast || startupFastScan);
+    }
+
+    private int GetNextScanDelay(ScanResult scanResult)
+    {
+        if (scanResult.IsStartupScan ||
+            scanResult.CandidateCount > 0 ||
+            scanResult.InjectedCount > 0)
+        {
+            return _activeScanIntervalMs;
+        }
+
+        return _idleScanIntervalMs;
+    }
+
+    private HashSet<string>? BuildProcessNameFilter()
+    {
+        HashSet<string>? names = null;
+        if (_enableExplorerTaskbarHook)
+        {
+            names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "explorer" };
+        }
+
+        if (_enableTrayIconHook && !_targetCatalog.IsEmpty)
+        {
+            names ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var processName in _targetCatalog.GetProcessNamesSnapshot())
+            {
+                names.Add(processName);
+            }
+        }
+
+        return names is { Count: > 0 } ? names : null;
     }
 
     private static IEnumerable<ProcessSnapshot> SelectCandidateProcesses(IReadOnlyList<ProcessSnapshot> candidates)
@@ -283,6 +344,13 @@ internal sealed class HookAgent
                 return false;
             }
 
+            if (HasResidentInjectee(process))
+            {
+                _injectedProcessIds.Add(process.Id);
+                AgentLog.Write($"Skipped resident injected process. Agent={_agentName} {DescribeProcess(process)}");
+                return false;
+            }
+
             if (_failedUntil.TryGetValue(process.Id, out var retryAt) && retryAt > now)
             {
                 return false;
@@ -322,15 +390,16 @@ internal sealed class HookAgent
     {
         try
         {
-            AgentLog.Write($"Injection attempt. Agent={_agentName} {DescribeProcess(process)} Injectee={DescribeInjectee()} TargetMode={_targetMode} EnableTrayIconHook={_enableTrayIconHook} EnableExplorerTaskbarHook={_enableExplorerTaskbarHook}");
+            AgentLog.Write($"Injection attempt. Agent={_agentName} {DescribeProcess(process)} Injectee={DescribeInjectee()} TargetMode={_targetMode} EnableTrayIconHook={_enableTrayIconHook} EnableExplorerTaskbarHook={_enableExplorerTaskbarHook} EnableExplorerTaskbarButtonImageCapture={_enableExplorerTaskbarButtonImageCapture}");
             RemoteHooking.Inject(
                 process.Id,
                 InjectionOptions.Default,
                 _injecteePath,
                 _injecteePath,
                 _pipeName,
-                _stopEventName,
-                _globalStopEventName);
+                _injecteeStopEventName,
+                _globalStopEventName,
+                _enableExplorerTaskbarButtonImageCapture);
 
             _injectedProcessIds.Add(process.Id);
             _failedUntil.Remove(process.Id);
@@ -350,6 +419,26 @@ internal sealed class HookAgent
             return false;
         }
     }
+
+    private bool HasResidentInjectee(ProcessSnapshot process)
+    {
+        try
+        {
+            using var aliveEvent = EventWaitHandle.OpenExisting(GetInjecteeAliveEventName(process.SessionId, process.Id));
+            return true;
+        }
+        catch (WaitHandleCannotBeOpenedException)
+        {
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string GetInjecteeAliveEventName(int sessionId, int processId) =>
+        $"Local\\TaskBar2.TrayHook.InjecteeAlive.{sessionId}.{processId}";
 
     private void PruneProcessState(IReadOnlyList<ProcessSnapshot> processes)
     {
@@ -456,6 +545,22 @@ internal sealed class HookAgent
             string.Equals(ProcessName, process.ProcessName, StringComparison.OrdinalIgnoreCase);
     }
 
+    private readonly struct ScanResult
+    {
+        public ScanResult(int candidateCount, int injectedCount, bool isStartupScan)
+        {
+            CandidateCount = candidateCount;
+            InjectedCount = injectedCount;
+            IsStartupScan = isStartupScan;
+        }
+
+        public int CandidateCount { get; }
+
+        public int InjectedCount { get; }
+
+        public bool IsStartupScan { get; }
+    }
+
     private void BroadcastTaskbarCreated(int injectedCount, bool force)
     {
         if (!force && DateTimeOffset.UtcNow - _lastTaskbarCreatedBroadcast < TimeSpan.FromSeconds(5))
@@ -515,7 +620,64 @@ internal static class ProcessSnapshotProvider
     private const int MaxPath = 260;
     private static readonly IntPtr InvalidHandleValue = new(-1);
 
-    public static IReadOnlyList<ProcessSnapshot> GetProcesses()
+    public static IReadOnlyList<ProcessSnapshot> GetProcesses(ICollection<string>? processNameFilter = null)
+    {
+        return TryGetProcessesFromWts(processNameFilter, out var processes)
+            ? processes
+            : GetProcessesFromToolhelp(processNameFilter);
+    }
+
+    private static bool TryGetProcessesFromWts(
+        ICollection<string>? processNameFilter,
+        out IReadOnlyList<ProcessSnapshot> processes)
+    {
+        processes = Array.Empty<ProcessSnapshot>();
+        if (!WTSEnumerateProcessesW(IntPtr.Zero, 0, 1, out var processInfoBuffer, out var count) ||
+            processInfoBuffer == IntPtr.Zero ||
+            count <= 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            var result = new List<ProcessSnapshot>(Math.Min(count, 256));
+            var entrySize = Marshal.SizeOf<WtsProcessInfo>();
+            for (var index = 0; index < count; index++)
+            {
+                var entryAddress = IntPtr.Add(processInfoBuffer, index * entrySize);
+                var entry = Marshal.PtrToStructure<WtsProcessInfo>(entryAddress);
+                var processId = unchecked((int)entry.ProcessId);
+                if (processId <= 0)
+                {
+                    continue;
+                }
+
+                var processName = Path.GetFileNameWithoutExtension(entry.ProcessName ?? "");
+                if (string.IsNullOrWhiteSpace(processName))
+                {
+                    continue;
+                }
+
+                if (processNameFilter is { Count: > 0 } &&
+                    !processNameFilter.Contains(processName))
+                {
+                    continue;
+                }
+
+                result.Add(new ProcessSnapshot(processId, processName, unchecked((int)entry.SessionId)));
+            }
+
+            processes = result;
+            return true;
+        }
+        finally
+        {
+            WTSFreeMemory(processInfoBuffer);
+        }
+    }
+
+    private static IReadOnlyList<ProcessSnapshot> GetProcessesFromToolhelp(ICollection<string>? processNameFilter)
     {
         var snapshotHandle = CreateToolhelp32Snapshot(Th32csSnapProcess, 0);
         if (snapshotHandle == IntPtr.Zero || snapshotHandle == InvalidHandleValue)
@@ -546,6 +708,12 @@ internal static class ProcessSnapshotProvider
 
                 var processName = Path.GetFileNameWithoutExtension(entry.ExecutableFile);
                 if (string.IsNullOrWhiteSpace(processName))
+                {
+                    continue;
+                }
+
+                if (processNameFilter is { Count: > 0 } &&
+                    !processNameFilter.Contains(processName))
                 {
                     continue;
                 }
@@ -585,6 +753,30 @@ internal static class ProcessSnapshotProvider
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("wtsapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool WTSEnumerateProcessesW(
+        IntPtr serverHandle,
+        int reserved,
+        int version,
+        out IntPtr processInfo,
+        out int count);
+
+    [DllImport("wtsapi32.dll")]
+    private static extern void WTSFreeMemory(IntPtr memory);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct WtsProcessInfo
+    {
+        public uint SessionId;
+        public uint ProcessId;
+
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public string? ProcessName;
+
+        public IntPtr UserSid;
+    }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct ProcessEntry32
@@ -872,6 +1064,8 @@ internal sealed class TrayIconTargetCatalog
 
     public bool Matches(string processName) => _processNames.Contains(processName);
 
+    public string[] GetProcessNamesSnapshot() => _processNames.ToArray();
+
     private void Refresh()
     {
         _processNames.Clear();
@@ -989,6 +1183,8 @@ internal sealed class AgentOptions
 
     public string StopEventName { get; set; } = "";
 
+    public string InjecteeStopEventName { get; set; } = "";
+
     public string GlobalStopEventName { get; set; } = "";
 
     public string? InjecteePath { get; set; }
@@ -1002,6 +1198,8 @@ internal sealed class AgentOptions
     public bool EnableTrayIconHook { get; set; } = true;
 
     public bool EnableExplorerTaskbarHook { get; set; }
+
+    public bool EnableExplorerTaskbarButtonImageCapture { get; set; }
 
     public static AgentOptions? Parse(string[] args)
     {
@@ -1026,6 +1224,7 @@ internal sealed class AgentOptions
 
         values.TryGetValue("injectee", out var injecteePath);
         values.TryGetValue("agentName", out var agentName);
+        values.TryGetValue("injecteeStopEvent", out var injecteeStopEventName);
         var interval = values.TryGetValue("interval", out var intervalValue) && int.TryParse(intervalValue, out var parsedInterval)
             ? parsedInterval
             : 2500;
@@ -1042,19 +1241,27 @@ internal sealed class AgentOptions
         var enableExplorerTaskbarHook = values.TryGetValue("enableExplorerTaskbarHook", out var enableExplorerValue) &&
                                         bool.TryParse(enableExplorerValue, out var parsedEnableExplorer) &&
                                         parsedEnableExplorer;
+        var enableExplorerTaskbarButtonImageCapture =
+            values.TryGetValue("enableExplorerTaskbarButtonImageCapture", out var enableExplorerCaptureValue) &&
+            bool.TryParse(enableExplorerCaptureValue, out var parsedEnableExplorerCapture) &&
+            parsedEnableExplorerCapture;
 
         return new AgentOptions
         {
             AgentName = string.IsNullOrWhiteSpace(agentName) ? "agent" : agentName,
             PipeName = pipeName,
             StopEventName = stopEventName,
+            InjecteeStopEventName = string.IsNullOrWhiteSpace(injecteeStopEventName)
+                ? stopEventName
+                : injecteeStopEventName,
             GlobalStopEventName = globalStopEventName,
             InjecteePath = string.IsNullOrWhiteSpace(injecteePath) ? null : injecteePath,
             IntervalMs = interval,
             TargetMode = targetMode,
             ShowAllTrayIcons = showAllTrayIcons,
             EnableTrayIconHook = enableTrayIconHook,
-            EnableExplorerTaskbarHook = enableExplorerTaskbarHook
+            EnableExplorerTaskbarHook = enableExplorerTaskbarHook,
+            EnableExplorerTaskbarButtonImageCapture = enableExplorerTaskbarButtonImageCapture
         };
     }
 }

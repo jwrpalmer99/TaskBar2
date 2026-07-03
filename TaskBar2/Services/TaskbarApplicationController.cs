@@ -13,7 +13,6 @@ internal sealed class TaskbarApplicationController : IDisposable
     private readonly TrayIconHookServer _trayIconHookServer = new();
     private readonly TrayHookAgentService _trayHookAgentService;
     private SettingsWindow? _settingsWindow;
-    private bool _useNativeRenderer;
     private int _hookRestartQueued;
 
     public TaskbarApplicationController()
@@ -34,7 +33,6 @@ internal sealed class TaskbarApplicationController : IDisposable
         AppCommands.RestartHooksRequested += OnRestartHooksRequested;
         AppCommands.ExitRequested += OnExitRequested;
         AppSettingsService.SettingsChanged += OnSettingsChanged;
-        _useNativeRenderer = AppSettingsService.Current.UseNativeTaskbarRenderer;
         DebugLogger.Write($"TaskBar2 starting. ProcessId={Environment.ProcessId}");
         _trayIconHookServer.Start();
         _trayHookAgentService.ApplySettings();
@@ -116,13 +114,6 @@ internal sealed class TaskbarApplicationController : IDisposable
     {
         _trayHookAgentService.ApplySettings();
         TrayIconSnapshotStore.ReapplyVisibilityFilter();
-
-        if (_useNativeRenderer != AppSettingsService.Current.UseNativeTaskbarRenderer)
-        {
-            _useNativeRenderer = AppSettingsService.Current.UseNativeTaskbarRenderer;
-            RebuildTaskbars();
-            _windowTracker.Refresh();
-        }
     }
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e)
@@ -142,9 +133,7 @@ internal sealed class TaskbarApplicationController : IDisposable
         foreach (var screen in Screen.AllScreens.Where(screen => !screen.Primary))
         {
             DebugLogger.WriteIfChanged($"screen-{screen.DeviceName}", $"Secondary screen active: {screen.DeviceName} Bounds={screen.Bounds}");
-            ISecondaryTaskbarHost taskbar = AppSettingsService.Current.UseNativeTaskbarRenderer
-                ? new NativeSecondaryTaskbarWindow(screen, _windowTracker)
-                : new SecondaryTaskbarWindow(screen, _windowTracker);
+            ISecondaryTaskbarHost taskbar = new NativeSecondaryTaskbarWindow(screen, _windowTracker);
             _taskbars.Add(taskbar);
             taskbar.Show();
         }

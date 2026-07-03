@@ -31,3 +31,15 @@ C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\bin\Relea
 C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\bin\Release-verify\TaskBar2.TrayHook.Injectee.dll
 C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\bin\Release-verify\TaskBar2.TrayHook.Injectee.pdb
 C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\obj\Release\net48\TaskBar2.TrayHook.Agent.sourcelink.json
+C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\bin\ReleaseCheck\EasyHook32.dll
+C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\bin\ReleaseCheck\EasyHook32Svc.exe
+C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\bin\ReleaseCheck\EasyHook64.dll
+C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\bin\ReleaseCheck\EasyHook64Svc.exe
+C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\bin\ReleaseCheck\EasyLoad32.dll
+C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\bin\ReleaseCheck\EasyLoad64.dll
+C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\bin\ReleaseCheck\TaskBar2.TrayHook.Agent.exe.config
+C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\bin\ReleaseCheck\TaskBar2.TrayHook.Agent.exe
+C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\bin\ReleaseCheck\TaskBar2.TrayHook.Agent.pdb
+C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\bin\ReleaseCheck\EasyHook.dll
+C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\bin\ReleaseCheck\TaskBar2.TrayHook.Injectee.dll
+C:\Users\Jeremy\source\repos\TaskBar2\TrayHook\TaskBar2.TrayHook.Agent\bin\ReleaseCheck\TaskBar2.TrayHook.Injectee.pdb

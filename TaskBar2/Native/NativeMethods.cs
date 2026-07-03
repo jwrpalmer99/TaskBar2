@@ -24,6 +24,7 @@ internal static class NativeMethods
     internal const int WS_POPUP = unchecked((int)0x80000000);
     internal const int SW_RESTORE = 9;
     internal const int SW_MINIMIZE = 6;
+    internal const int SW_MAXIMIZE = 3;
     internal const int SW_SHOW = 5;
 
     internal const int WM_NULL = 0x0000;
@@ -133,6 +134,9 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     internal static extern bool IsIconic(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    internal static extern bool IsZoomed(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     internal static extern IntPtr GetForegroundWindow();

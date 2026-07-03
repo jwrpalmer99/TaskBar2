@@ -104,9 +104,7 @@ public sealed class WindowTracker : IDisposable
 
         PruneWindowCache(includedHandles);
         PruneProcessCache(includedProcessIds);
-        var orderedWindows = windows
-            .OrderBy(window => window.Title, StringComparer.CurrentCultureIgnoreCase)
-            .ToArray();
+        var orderedWindows = windows.ToArray();
         var snapshot = BuildSnapshot(orderedWindows);
         if (snapshot.SequenceEqual(_lastSnapshot))
         {
@@ -253,11 +251,13 @@ public sealed class WindowTracker : IDisposable
         }
 
         var processIdentity = GetProcessIdentity(processId);
-        var iconFingerprint = GetIconFingerprint(hwnd, cache, processIdentity);
+        var appUserModelId = GetAppUserModelId(hwnd, cache);
+        var packageInfo = PackageAppResolver.Resolve(appUserModelId);
+        var iconFingerprint = GetIconFingerprint(hwnd, cache, processIdentity, packageInfo);
         item = new TaskbarItem(
             hwnd,
             title,
-            GetWindowIcon(hwnd, cache, iconFingerprint, processIdentity),
+            GetWindowIcon(hwnd, cache, iconFingerprint, processIdentity, packageInfo),
             iconFingerprint,
             hwnd == foreground,
             NativeMethods.IsIconic(hwnd),
@@ -265,8 +265,9 @@ public sealed class WindowTracker : IDisposable
             processId,
             processIdentity.Name,
             processIdentity.Path,
-            GetAppUserModelId(hwnd, cache),
-            GetGroupKey(hwnd, cache, processIdentity));
+            appUserModelId,
+            GetGroupKey(hwnd, cache, processIdentity),
+            packageInfo?.IconPath ?? processIdentity.Path);
         return true;
     }
 
@@ -327,7 +328,11 @@ public sealed class WindowTracker : IDisposable
         return cache.Title;
     }
 
-    private string GetIconFingerprint(IntPtr hwnd, WindowCacheEntry cache, ProcessCacheEntry processIdentity)
+    private string GetIconFingerprint(
+        IntPtr hwnd,
+        WindowCacheEntry cache,
+        ProcessCacheEntry processIdentity,
+        PackageAppInfo? packageInfo)
     {
         var now = DateTimeOffset.UtcNow;
         if (cache.IconFingerprintLoaded && now < cache.NextIconFingerprintRefresh)
@@ -335,7 +340,10 @@ public sealed class WindowTracker : IDisposable
             return cache.IconFingerprint;
         }
 
-        cache.IconFingerprint = WindowIconProvider.GetIconFingerprint(hwnd, processIdentity.Path);
+        var packageIconFingerprint = PackageAppResolver.GetFileFingerprint(packageInfo?.IconPath);
+        cache.IconFingerprint = !string.IsNullOrWhiteSpace(packageIconFingerprint)
+            ? $"package:{packageIconFingerprint}"
+            : WindowIconProvider.GetIconFingerprint(hwnd, processIdentity.Path);
         cache.IconFingerprintLoaded = true;
         cache.NextIconFingerprintRefresh = now + IconFingerprintRefreshInterval;
         return cache.IconFingerprint;
@@ -345,21 +353,23 @@ public sealed class WindowTracker : IDisposable
         IntPtr hwnd,
         WindowCacheEntry cache,
         string iconFingerprint,
-        ProcessCacheEntry processIdentity)
+        ProcessCacheEntry processIdentity,
+        PackageAppInfo? packageInfo)
     {
         if (cache.IconLoaded && string.Equals(cache.IconImageFingerprint, iconFingerprint, StringComparison.Ordinal))
         {
             return cache.Icon;
         }
 
-        if (AppSettingsService.Current.UseNativeTaskbarRenderer)
+        var packageIcon = PackageAppResolver.CreateImageSource(packageInfo?.IconPath);
+        if (packageIcon is not null)
         {
+            cache.Icon = packageIcon;
+            cache.IconLoaded = true;
+            cache.IconImageFingerprint = iconFingerprint;
             return cache.Icon;
         }
 
-        cache.Icon = WindowIconProvider.GetIcon(hwnd, processIdentity.Path);
-        cache.IconLoaded = true;
-        cache.IconImageFingerprint = iconFingerprint;
         return cache.Icon;
     }
 
@@ -526,7 +536,6 @@ public sealed class WindowTracker : IDisposable
                 break;
             case NativeMethods.EVENT_OBJECT_LOCATIONCHANGE:
                 cached.MonitorDeviceNameLoaded = false;
-                cached.IconFingerprintLoaded = false;
                 break;
         }
     }

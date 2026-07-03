@@ -9,11 +9,21 @@ namespace TaskBar2.Services;
 internal static partial class PinnedTaskbarShortcutProvider
 {
     private const int MaxLinkStringLength = 4096;
+    private static readonly TimeSpan SignatureRefreshInterval = TimeSpan.FromSeconds(5);
     private static readonly object Sync = new();
     private static PinnedShortcutCache? Cache;
 
     public static IReadOnlyList<TaskbarItem> GetPinnedItems()
     {
+        var now = DateTimeOffset.UtcNow;
+        lock (Sync)
+        {
+            if (Cache is not null && now - Cache.LastChecked < SignatureRefreshInterval)
+            {
+                return Cache.Items;
+            }
+        }
+
         var folder = GetPinnedTaskbarFolder();
         if (!Directory.Exists(folder))
         {
@@ -35,6 +45,7 @@ internal static partial class PinnedTaskbarShortcutProvider
             {
                 if (Cache is not null && string.Equals(Cache.Signature, signature, StringComparison.Ordinal))
                 {
+                    Cache = Cache with { LastChecked = now };
                     return Cache.Items;
                 }
             }
@@ -47,7 +58,7 @@ internal static partial class PinnedTaskbarShortcutProvider
 
             lock (Sync)
             {
-                Cache = new PinnedShortcutCache(signature, items);
+                Cache = new PinnedShortcutCache(signature, items, now);
             }
 
             DebugLogger.WriteIfChanged(
@@ -267,7 +278,7 @@ internal static partial class PinnedTaskbarShortcutProvider
 
     private readonly record struct IconLocation(string Path, int Index);
 
-    private sealed record PinnedShortcutCache(string Signature, IReadOnlyList<TaskbarItem> Items);
+    private sealed record PinnedShortcutCache(string Signature, IReadOnlyList<TaskbarItem> Items, DateTimeOffset LastChecked);
 
     [ComImport]
     [Guid("00021401-0000-0000-C000-000000000046")]

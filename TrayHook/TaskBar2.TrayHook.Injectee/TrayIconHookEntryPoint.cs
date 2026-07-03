@@ -45,23 +45,37 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
     private static SetProgressStateDelegate? _originalSetProgressState;
     private static SetOverlayIconDelegate? _originalSetOverlayIcon;
     private static string _pipeName = "";
+    private static bool _enableExplorerTaskbarButtonImageCapture;
     private static readonly ConcurrentDictionary<IntPtr, LocalHook> TaskbarMethodHooks = [];
 
     private LocalHook? _shellNotifyIconWHook;
     private LocalHook? _shellNotifyIconAHook;
     private LocalHook? _coCreateInstanceHook;
 
-    public TrayIconHookEntryPoint(RemoteHooking.IContext context, string pipeName, string stopEventName, string globalStopEventName)
+    public TrayIconHookEntryPoint(
+        RemoteHooking.IContext context,
+        string pipeName,
+        string stopEventName,
+        string globalStopEventName,
+        bool enableExplorerTaskbarButtonImageCapture)
     {
         _pipeName = pipeName;
+        _enableExplorerTaskbarButtonImageCapture = enableExplorerTaskbarButtonImageCapture;
     }
 
-    public void Run(RemoteHooking.IContext context, string pipeName, string stopEventName, string globalStopEventName)
+    public void Run(
+        RemoteHooking.IContext context,
+        string pipeName,
+        string stopEventName,
+        string globalStopEventName,
+        bool enableExplorerTaskbarButtonImageCapture)
     {
         _pipeName = pipeName;
-        InjecteeLog.Write($"Injectee Run entered. ProcessId={Process.GetCurrentProcess().Id} ProcessName={Process.GetCurrentProcess().ProcessName} Pipe={pipeName}");
+        _enableExplorerTaskbarButtonImageCapture = enableExplorerTaskbarButtonImageCapture;
+        InjecteeLog.Write($"Injectee Run entered. ProcessId={Process.GetCurrentProcess().Id} ProcessName={Process.GetCurrentProcess().ProcessName} Pipe={pipeName} EnableExplorerTaskbarButtonImageCapture={_enableExplorerTaskbarButtonImageCapture}");
         using var stopEvent = EventWaitHandle.OpenExisting(stopEventName);
         using var globalStopEvent = EventWaitHandle.OpenExisting(globalStopEventName);
+        using var aliveEvent = CreateAliveEvent();
         using var writerStop = new ManualResetEvent(false);
         var writer = new Thread(() => PipeWriterLoop(writerStop))
         {
@@ -73,7 +87,7 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
         try
         {
             InstallHooks();
-            ExplorerTaskbarSnapshotCapture.StartIfExplorer();
+            ExplorerTaskbarSnapshotCapture.StartIfExplorer(_enableExplorerTaskbarButtonImageCapture);
             var stopHandles = new WaitHandle[] { stopEvent, globalStopEvent };
             while (WaitHandle.WaitAny(stopHandles, 1000) == WaitHandle.WaitTimeout)
             {
@@ -81,6 +95,7 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
         }
         finally
         {
+            InjecteeLog.Write($"Injectee stopping. ProcessId={Process.GetCurrentProcess().Id} ProcessName={Process.GetCurrentProcess().ProcessName}");
             ExplorerTaskbarSnapshotCapture.Stop();
             DisposeHook(_shellNotifyIconWHook);
             DisposeHook(_shellNotifyIconAHook);
@@ -102,6 +117,7 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
             writerStop.Set();
             PendingSignal.Set();
             writer.Join(1000);
+            InjecteeLog.Write($"Injectee stopped. ProcessId={Process.GetCurrentProcess().Id} ProcessName={Process.GetCurrentProcess().ProcessName}");
         }
     }
 
@@ -114,6 +130,17 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
         catch
         {
         }
+    }
+
+    private static EventWaitHandle CreateAliveEvent()
+    {
+        var currentProcess = Process.GetCurrentProcess();
+        var aliveEvent = new EventWaitHandle(
+            true,
+            EventResetMode.ManualReset,
+            $"Local\\TaskBar2.TrayHook.InjecteeAlive.{currentProcess.SessionId}.{currentProcess.Id}");
+        aliveEvent.Set();
+        return aliveEvent;
     }
 
     private void InstallHooks()

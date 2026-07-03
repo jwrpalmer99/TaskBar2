@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
-using System.Windows.Interop;
 using TaskBar2.Native;
 
 namespace TaskBar2.Services;
@@ -12,11 +11,6 @@ internal sealed class AppBarHost : IDisposable
     private readonly Screen _screen;
     private int _heightPixels;
     private bool _registered;
-
-    public AppBarHost(WindowInteropHelper helper, Screen screen, int heightPixels)
-        : this(helper.Handle, screen, heightPixels)
-    {
-    }
 
     public AppBarHost(IntPtr hwnd, Screen screen, int heightPixels)
     {

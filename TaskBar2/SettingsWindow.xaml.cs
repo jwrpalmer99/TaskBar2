@@ -1,25 +1,25 @@
 using System.Windows;
 using System.Windows.Controls;
 using TaskBar2.Services;
+using Screen = System.Windows.Forms.Screen;
 
 namespace TaskBar2;
 
 public partial class SettingsWindow : Window
 {
+    private bool _loadingMonitorSettings;
+
     public SettingsWindow()
     {
         InitializeComponent();
-        ShowOnlyThisMonitorCheckBox.IsChecked = AppSettingsService.Current.ShowOnlyAppsOnThisMonitor;
+        PopulateMonitors();
+        LoadSelectedMonitorSettings();
         EnableInvasiveTrayIconHookCheckBox.IsChecked = AppSettingsService.Current.EnableInvasiveTrayIconHook;
         EnableElevatedTrayIconHookAgentCheckBox.IsChecked = AppSettingsService.Current.EnableElevatedTrayIconHookAgent;
         ShowAllTrayIconsCheckBox.IsChecked = AppSettingsService.Current.ShowAllTrayIcons;
-        UseNativeTaskbarRendererCheckBox.IsChecked = AppSettingsService.Current.UseNativeTaskbarRenderer;
         PauseUpdatesWhileFullscreenCheckBox.IsChecked = AppSettingsService.Current.PauseNonClockUpdatesWhileFullscreen;
         EnableExperimentalExplorerTaskbarHookCheckBox.IsChecked = AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook;
-        EnableExperimentalExplorerTaskbarMenuProxyCheckBox.IsChecked = AppSettingsService.Current.EnableExperimentalExplorerTaskbarMenuProxy;
-        SelectAlignment(AppSettingsService.Current.TaskbarButtonAlignment);
-        TaskbarScaleSlider.Value = AppSettingsService.Current.TaskbarScale;
-        UpdateScaleText();
+        EnableExperimentalExplorerTaskbarButtonImageCaptureCheckBox.IsChecked = AppSettingsService.Current.EnableExperimentalExplorerTaskbarButtonImageCapture;
         TaskbarPollingIntervalTextBox.Text = AppSettingsService.Current.TaskbarPollingIntervalMs.ToString();
         TrayRefreshIntervalTextBox.Text = AppSettingsService.Current.TrayRefreshIntervalMs.ToString();
     }
@@ -44,16 +44,23 @@ public partial class SettingsWindow : Window
     {
         AppSettingsService.Update(settings =>
         {
-            settings.ShowOnlyAppsOnThisMonitor = ShowOnlyThisMonitorCheckBox.IsChecked == true;
             settings.EnableInvasiveTrayIconHook = EnableInvasiveTrayIconHookCheckBox.IsChecked == true;
             settings.EnableElevatedTrayIconHookAgent = EnableElevatedTrayIconHookAgentCheckBox.IsChecked == true;
             settings.ShowAllTrayIcons = ShowAllTrayIconsCheckBox.IsChecked == true;
-            settings.UseNativeTaskbarRenderer = UseNativeTaskbarRendererCheckBox.IsChecked == true;
             settings.PauseNonClockUpdatesWhileFullscreen = PauseUpdatesWhileFullscreenCheckBox.IsChecked == true;
             settings.EnableExperimentalExplorerTaskbarHook = EnableExperimentalExplorerTaskbarHookCheckBox.IsChecked == true;
-            settings.EnableExperimentalExplorerTaskbarMenuProxy = EnableExperimentalExplorerTaskbarMenuProxyCheckBox.IsChecked == true;
-            settings.TaskbarButtonAlignment = GetSelectedAlignment();
-            settings.TaskbarScale = TaskbarScaleSlider.Value;
+            settings.EnableExperimentalExplorerTaskbarButtonImageCapture = EnableExperimentalExplorerTaskbarButtonImageCaptureCheckBox.IsChecked == true;
+            AppSettingsService.SetMonitorTaskbarSettings(
+                settings,
+                GetSelectedMonitorDeviceName(),
+                new MonitorTaskbarSettings
+                {
+                    ShowOnlyAppsOnThisMonitor = ShowOnlyThisMonitorCheckBox.IsChecked == true,
+                    MirrorPrimaryNotificationArea = MirrorPrimaryNotificationAreaCheckBox.IsChecked == true,
+                    ShowClock = ShowClockCheckBox.IsChecked == true,
+                    TaskbarButtonAlignment = GetSelectedAlignment(),
+                    TaskbarScale = TaskbarScaleSlider.Value
+                });
             settings.TaskbarPollingIntervalMs = ParseInterval(
                 TaskbarPollingIntervalTextBox.Text,
                 settings.TaskbarPollingIntervalMs);
@@ -64,14 +71,72 @@ public partial class SettingsWindow : Window
 
         TaskbarPollingIntervalTextBox.Text = AppSettingsService.Current.TaskbarPollingIntervalMs.ToString();
         TrayRefreshIntervalTextBox.Text = AppSettingsService.Current.TrayRefreshIntervalMs.ToString();
-        TaskbarScaleSlider.Value = AppSettingsService.Current.TaskbarScale;
-        UpdateScaleText();
+        LoadSelectedMonitorSettings();
     }
 
     private void TaskbarScaleSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         UpdateScaleText();
     }
+
+    private void MonitorComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loadingMonitorSettings)
+        {
+            LoadSelectedMonitorSettings();
+        }
+    }
+
+    private void PopulateMonitors()
+    {
+        var screens = Screen.AllScreens
+            .Where(screen => !screen.Primary)
+            .ToArray();
+        if (screens.Length == 0)
+        {
+            screens = Screen.AllScreens;
+        }
+
+        var monitorOptions = screens
+            .Select(screen => new MonitorOption(
+                screen.DeviceName,
+                $"{screen.DeviceName} ({screen.Bounds.Width}x{screen.Bounds.Height} at {screen.Bounds.Left},{screen.Bounds.Top})"))
+            .ToArray();
+        MonitorComboBox.ItemsSource = monitorOptions;
+
+        var cursorScreen = Screen.FromPoint(System.Windows.Forms.Control.MousePosition);
+        var selectedIndex = Array.FindIndex(
+            monitorOptions,
+            option => string.Equals(option.DeviceName, cursorScreen.DeviceName, StringComparison.OrdinalIgnoreCase));
+        MonitorComboBox.SelectedIndex = selectedIndex >= 0
+            ? selectedIndex
+            : MonitorComboBox.Items.Count > 0 ? 0 : -1;
+    }
+
+    private void LoadSelectedMonitorSettings()
+    {
+        var monitorDeviceName = GetSelectedMonitorDeviceName();
+        var settings = AppSettingsService.GetMonitorTaskbarSettings(monitorDeviceName);
+        _loadingMonitorSettings = true;
+        try
+        {
+            ShowOnlyThisMonitorCheckBox.IsChecked = settings.ShowOnlyAppsOnThisMonitor;
+            MirrorPrimaryNotificationAreaCheckBox.IsChecked = settings.MirrorPrimaryNotificationArea;
+            ShowClockCheckBox.IsChecked = settings.ShowClock;
+            SelectAlignment(settings.TaskbarButtonAlignment);
+            TaskbarScaleSlider.Value = settings.TaskbarScale;
+            UpdateScaleText();
+        }
+        finally
+        {
+            _loadingMonitorSettings = false;
+        }
+    }
+
+    private string GetSelectedMonitorDeviceName() =>
+        MonitorComboBox.SelectedItem is MonitorOption option
+            ? option.DeviceName
+            : "";
 
     private void SelectAlignment(string alignment)
     {
@@ -106,4 +171,6 @@ public partial class SettingsWindow : Window
             TaskbarScaleTextBlock.Text = $"{TaskbarScaleSlider.Value:P0}";
         }
     }
+
+    private sealed record MonitorOption(string DeviceName, string Label);
 }

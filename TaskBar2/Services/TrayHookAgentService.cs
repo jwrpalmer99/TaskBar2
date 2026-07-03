@@ -9,7 +9,8 @@ namespace TaskBar2.Services;
 
 internal sealed class TrayHookAgentService : IDisposable
 {
-    private static readonly TimeSpan GlobalStopPulseDuration = TimeSpan.FromMilliseconds(1500);
+    private static readonly TimeSpan GlobalStopPulseDuration = TimeSpan.FromMilliseconds(2500);
+    private static readonly TimeSpan AgentStopTimeout = TimeSpan.FromSeconds(10);
 
     private readonly string _pipeName;
     private readonly string _globalStopEventName;
@@ -23,7 +24,14 @@ internal sealed class TrayHookAgentService : IDisposable
     {
         _pipeName = pipeName;
         _globalStopEventName = $"Local\\TaskBar2.TrayHook.StopAll.{Process.GetCurrentProcess().SessionId}";
-        _globalStopEvent = new EventWaitHandle(false, EventResetMode.ManualReset, _globalStopEventName);
+        _globalStopEvent = new EventWaitHandle(false, EventResetMode.ManualReset, _globalStopEventName, out var createdNew);
+        if (!createdNew)
+        {
+            ResetStaleInjectedHookStopSignal();
+        }
+        StopOwnedAgentProcesses();
+        StopOwnedEasyHookServices();
+
         _agent = new AgentProcess(_pipeName, _globalStopEventName, "agent");
         _standardAgent = new AgentProcess(_pipeName, _globalStopEventName, "standard");
         _explorerAgent = new AgentProcess(_pipeName, _globalStopEventName, "explorer");
@@ -36,10 +44,12 @@ internal sealed class TrayHookAgentService : IDisposable
             return;
         }
 
-        var enableTrayIconHook = AppSettingsService.Current.EnableInvasiveTrayIconHook;
-        var enableExplorerTaskbarHook =
-            AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook ||
-            AppSettingsService.Current.EnableExperimentalExplorerTaskbarMenuProxy;
+        var enableTrayIconHook =
+            ShouldMirrorNotificationAreaOnAnySecondaryMonitor() &&
+            AppSettingsService.Current.EnableInvasiveTrayIconHook;
+        var enableExplorerTaskbarHook = AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook;
+        var enableExplorerTaskbarButtonImageCapture =
+            AppSettingsService.Current.EnableExperimentalExplorerTaskbarButtonImageCapture;
 
         if (enableTrayIconHook || enableExplorerTaskbarHook)
         {
@@ -64,12 +74,12 @@ internal sealed class TrayHookAgentService : IDisposable
                     ? _standardAgent.RequiresRestart("StandardOnly", elevated: false, showAllTrayIcons, standardEnableTray, standardEnableExplorer)
                     : _standardAgent.IsRunning) ||
                 (startExplorerAgent
-                    ? _explorerAgent.RequiresRestart("StandardOnly", elevated: false, showAllTrayIcons: false, enableTrayIconHook: false, enableExplorerTaskbarHook: true)
+                    ? _explorerAgent.RequiresRestart("StandardOnly", elevated: false, showAllTrayIcons: false, enableTrayIconHook: false, enableExplorerTaskbarHook: true, enableExplorerTaskbarButtonImageCapture)
                     : _explorerAgent.IsRunning);
 
             if (needsRestart)
             {
-                Stop(resetGlobalStopEvent: true);
+                Stop(signalInjectedHooks: false);
             }
             else
             {
@@ -103,12 +113,13 @@ internal sealed class TrayHookAgentService : IDisposable
                     elevated: false,
                     showAllTrayIcons: false,
                     enableTrayIconHook: false,
-                    enableExplorerTaskbarHook: true);
+                    enableExplorerTaskbarHook: true,
+                    enableExplorerTaskbarButtonImageCapture);
             }
         }
         else
         {
-            Stop(resetGlobalStopEvent: true);
+            Stop(signalInjectedHooks: false);
         }
     }
 
@@ -120,7 +131,7 @@ internal sealed class TrayHookAgentService : IDisposable
         }
 
         DebugLogger.Write("Tray hook agent force restart requested.");
-        Stop(resetGlobalStopEvent: true);
+        Stop(signalInjectedHooks: false);
         ApplySettings();
     }
 
@@ -132,31 +143,39 @@ internal sealed class TrayHookAgentService : IDisposable
         }
 
         _disposed = true;
-        Stop(resetGlobalStopEvent: false);
+        Stop(signalInjectedHooks: false);
         _globalStopEvent.Dispose();
     }
 
-    private void Stop(bool resetGlobalStopEvent)
+    private void Stop(bool signalInjectedHooks)
     {
-        var signaledAt = SignalGlobalStopEvent();
+        var signaledAt = signalInjectedHooks
+            ? SignalGlobalStopEvent()
+            : DateTimeOffset.UtcNow;
+        _agent.SignalStop();
+        _standardAgent.SignalStop();
+        _explorerAgent.SignalStop();
+        if (signalInjectedHooks)
+        {
+            WaitForGlobalStopPulse(signaledAt);
+        }
+
         _agent.Stop();
         _standardAgent.Stop();
         _explorerAgent.Stop();
+        StopOwnedAgentProcesses();
+        StopOwnedEasyHookServices();
 
-        if (resetGlobalStopEvent)
+        if (signalInjectedHooks)
         {
-            WaitForGlobalStopPulse(signaledAt);
             ResetGlobalStopEvent();
         }
     }
 
-    private void ReleaseStaleInjectedHooks()
+    private void ResetStaleInjectedHookStopSignal()
     {
-        DebugLogger.Write($"Tray hook global stop pulse starting. Event={_globalStopEventName}");
-        var signaledAt = SignalGlobalStopEvent();
-        WaitForGlobalStopPulse(signaledAt);
+        DebugLogger.Write($"Tray hook global stop event already exists; resetting without unloading resident hooks. Event={_globalStopEventName}");
         ResetGlobalStopEvent();
-        DebugLogger.Write("Tray hook global stop pulse complete.");
     }
 
     private DateTimeOffset SignalGlobalStopEvent()
@@ -193,18 +212,100 @@ internal sealed class TrayHookAgentService : IDisposable
         }
     }
 
+    private static void StopOwnedEasyHookServices()
+    {
+        var agentRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "TrayHookAgent"));
+        StopOwnedProcessesByName("EasyHook32Svc", agentRoot, "stale EasyHook service helper");
+        StopOwnedProcessesByName("EasyHook64Svc", agentRoot, "stale EasyHook service helper");
+    }
+
+    private static void StopOwnedAgentProcesses()
+    {
+        var agentRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "TrayHookAgent"));
+        StopOwnedProcessesByName("TaskBar2.TrayHook.Agent", agentRoot, "stale tray hook agent");
+    }
+
+    private static void StopOwnedProcessesByName(string processName, string agentRoot, string description)
+    {
+        foreach (var process in Process.GetProcessesByName(processName))
+        {
+            using (process)
+            {
+                if (process.Id == Environment.ProcessId)
+                {
+                    continue;
+                }
+
+                string? processPath = null;
+                try
+                {
+                    processPath = process.MainModule?.FileName;
+                }
+                catch (Exception exception)
+                {
+                    DebugLogger.WriteIfChanged(
+                        $"owned-process-path-{process.Id}",
+                        $"Could not inspect {processName} path. ProcessId={process.Id} Error={exception.GetType().Name}: {exception.Message}");
+                }
+
+                if (string.IsNullOrWhiteSpace(processPath) || !IsPathUnder(processPath, agentRoot))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    DebugLogger.Write($"Stopping {description}. ProcessId={process.Id} Path={processPath}");
+                    process.Kill();
+                    process.WaitForExit((int)TimeSpan.FromSeconds(3).TotalMilliseconds);
+                }
+                catch (Exception exception)
+                {
+                    DebugLogger.WriteIfChanged(
+                        $"owned-process-stop-{process.Id}",
+                        $"Could not stop {description}. ProcessId={process.Id} Path={processPath} Error={exception.GetType().Name}: {exception.Message}");
+                }
+            }
+        }
+    }
+
+    private static bool IsPathUnder(string path, string root)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            return fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool ShouldMirrorNotificationAreaOnAnySecondaryMonitor()
+    {
+        var secondaryMonitorDeviceNames = System.Windows.Forms.Screen.AllScreens
+            .Where(screen => !screen.Primary)
+            .Select(screen => screen.DeviceName);
+        return AppSettingsService.ShouldMirrorNotificationAreaOnAnyMonitor(secondaryMonitorDeviceNames);
+    }
+
     private sealed class AgentProcess
     {
         private readonly string _pipeName;
         private readonly string _globalStopEventName;
         private Process? _process;
         private EventWaitHandle? _stopEvent;
+        private EventWaitHandle? _injecteeStopEvent;
         private string? _stopEventName;
+        private string? _injecteeStopEventName;
         private string _targetMode = "StandardOnly";
         private bool _elevated;
         private bool _showAllTrayIcons;
         private bool _enableTrayIconHook;
         private bool _enableExplorerTaskbarHook;
+        private bool _enableExplorerTaskbarButtonImageCapture;
         private bool _startedWithoutHandle;
         private readonly string _name;
 
@@ -222,27 +323,31 @@ internal sealed class TrayHookAgentService : IDisposable
             bool elevated,
             bool showAllTrayIcons,
             bool enableTrayIconHook,
-            bool enableExplorerTaskbarHook) =>
+            bool enableExplorerTaskbarHook,
+            bool enableExplorerTaskbarButtonImageCapture = false) =>
             IsRunning &&
             (!string.Equals(_targetMode, targetMode, StringComparison.OrdinalIgnoreCase) ||
              _elevated != elevated ||
              _showAllTrayIcons != showAllTrayIcons ||
              _enableTrayIconHook != enableTrayIconHook ||
-             _enableExplorerTaskbarHook != enableExplorerTaskbarHook);
+             _enableExplorerTaskbarHook != enableExplorerTaskbarHook ||
+             _enableExplorerTaskbarButtonImageCapture != enableExplorerTaskbarButtonImageCapture);
 
         public void Start(
             string targetMode,
             bool elevated,
             bool showAllTrayIcons,
             bool enableTrayIconHook,
-            bool enableExplorerTaskbarHook)
+            bool enableExplorerTaskbarHook,
+            bool enableExplorerTaskbarButtonImageCapture = false)
         {
             if (IsRunning &&
                 string.Equals(_targetMode, targetMode, StringComparison.OrdinalIgnoreCase) &&
                 _elevated == elevated &&
                 _showAllTrayIcons == showAllTrayIcons &&
                 _enableTrayIconHook == enableTrayIconHook &&
-                _enableExplorerTaskbarHook == enableExplorerTaskbarHook)
+                _enableExplorerTaskbarHook == enableExplorerTaskbarHook &&
+                _enableExplorerTaskbarButtonImageCapture == enableExplorerTaskbarButtonImageCapture)
             {
                 return;
             }
@@ -253,6 +358,7 @@ internal sealed class TrayHookAgentService : IDisposable
             _showAllTrayIcons = showAllTrayIcons;
             _enableTrayIconHook = enableTrayIconHook;
             _enableExplorerTaskbarHook = enableExplorerTaskbarHook;
+            _enableExplorerTaskbarButtonImageCapture = enableExplorerTaskbarButtonImageCapture;
 
             var agentPath = ResolveAgentPath();
             if (agentPath is null)
@@ -264,8 +370,11 @@ internal sealed class TrayHookAgentService : IDisposable
             }
 
             _stopEventName = $"Local\\TaskBar2.TrayHook.Stop.{Environment.ProcessId}.{_name}";
+            _injecteeStopEventName = $"Local\\TaskBar2.TrayHook.InjecteeStop.{Environment.ProcessId}.{_name}";
             _stopEvent?.Dispose();
+            _injecteeStopEvent?.Dispose();
             _stopEvent = new EventWaitHandle(false, EventResetMode.ManualReset, _stopEventName);
+            _injecteeStopEvent = new EventWaitHandle(false, EventResetMode.ManualReset, _injecteeStopEventName);
 
             var arguments = CreateArguments();
 
@@ -275,14 +384,14 @@ internal sealed class TrayHookAgentService : IDisposable
                 {
                     _process = null;
                     _startedWithoutHandle = true;
-                    DebugLogger.Write($"Tray hook agent started through Explorer shell. Name={_name} Path={agentPath} Elevated=False TargetMode={_targetMode} ShowAllTrayIcons={_showAllTrayIcons} EnableTrayIconHook={_enableTrayIconHook} EnableExplorerTaskbarHook={_enableExplorerTaskbarHook}");
+                    DebugLogger.Write($"Tray hook agent started through Explorer shell. Name={_name} Path={agentPath} Elevated=False TargetMode={_targetMode} ShowAllTrayIcons={_showAllTrayIcons} EnableTrayIconHook={_enableTrayIconHook} EnableExplorerTaskbarHook={_enableExplorerTaskbarHook} EnableExplorerTaskbarButtonImageCapture={_enableExplorerTaskbarButtonImageCapture}");
                     return;
                 }
 
                 var startInfo = CreateStartInfo(agentPath, arguments);
                 _process = Process.Start(startInfo);
                 _startedWithoutHandle = false;
-                DebugLogger.Write($"Tray hook agent started. Name={_name} Path={agentPath} ProcessId={_process?.Id} Elevated={_elevated} TargetMode={_targetMode} ShowAllTrayIcons={_showAllTrayIcons} EnableTrayIconHook={_enableTrayIconHook} EnableExplorerTaskbarHook={_enableExplorerTaskbarHook}");
+                DebugLogger.Write($"Tray hook agent started. Name={_name} Path={agentPath} ProcessId={_process?.Id} Elevated={_elevated} TargetMode={_targetMode} ShowAllTrayIcons={_showAllTrayIcons} EnableTrayIconHook={_enableTrayIconHook} EnableExplorerTaskbarHook={_enableExplorerTaskbarHook} EnableExplorerTaskbarButtonImageCapture={_enableExplorerTaskbarButtonImageCapture}");
             }
             catch (Exception exception)
             {
@@ -295,20 +404,15 @@ internal sealed class TrayHookAgentService : IDisposable
 
         public void Stop()
         {
-            try
-            {
-                _stopEvent?.Set();
-            }
-            catch (ObjectDisposedException)
-            {
-            }
+            SignalStop();
 
             if (_process is { HasExited: false })
             {
-                if (!WaitForExit(_process, TimeSpan.FromSeconds(3)))
+                if (!WaitForExit(_process, AgentStopTimeout))
                 {
                     try
                     {
+                        DebugLogger.Write($"Tray hook agent did not stop within {AgentStopTimeout.TotalSeconds:0.#}s; killing. Name={_name} ProcessId={_process.Id}");
                         _process.Kill();
                     }
                     catch (Exception exception)
@@ -325,6 +429,19 @@ internal sealed class TrayHookAgentService : IDisposable
             _startedWithoutHandle = false;
             _stopEvent?.Dispose();
             _stopEvent = null;
+            _injecteeStopEvent?.Dispose();
+            _injecteeStopEvent = null;
+        }
+
+        public void SignalStop()
+        {
+            try
+            {
+                _stopEvent?.Set();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
         }
 
         private string[] CreateArguments()
@@ -334,12 +451,14 @@ internal sealed class TrayHookAgentService : IDisposable
                 "--pipe", _pipeName,
                 "--agentName", _name,
                 "--stopEvent", _stopEventName ?? "",
+                "--injecteeStopEvent", _injecteeStopEventName ?? "",
                 "--globalStopEvent", _globalStopEventName,
                 "--interval", "1000",
                 "--targetMode", _targetMode,
                 "--showAllTrayIcons", _showAllTrayIcons ? "true" : "false",
                 "--enableTrayIconHook", _enableTrayIconHook ? "true" : "false",
-                "--enableExplorerTaskbarHook", _enableExplorerTaskbarHook ? "true" : "false"
+                "--enableExplorerTaskbarHook", _enableExplorerTaskbarHook ? "true" : "false",
+                "--enableExplorerTaskbarButtonImageCapture", _enableExplorerTaskbarButtonImageCapture ? "true" : "false"
             ];
         }
 

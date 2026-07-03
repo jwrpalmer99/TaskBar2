@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="TaskBar2 Settings"
         Width="500"
-        Height="720"
+        Height="760"
         ResizeMode="NoResize"
         WindowStartupLocation="CenterScreen"
         Background="#F5F5F5">
@@ -19,104 +19,138 @@
                    FontWeight="SemiBold"
                    Foreground="#202020" />
 
-        <StackPanel Grid.Row="1" Margin="0,18,0,0">
-            <CheckBox x:Name="ShowOnlyThisMonitorCheckBox"
-                      Content="Show only apps on this monitor"
-                      Margin="0,0,0,10" />
-            <CheckBox Content="Mirror primary notification area"
-                      IsChecked="True"
-                      IsEnabled="False"
-                      Margin="0,0,0,10" />
-            <CheckBox x:Name="EnableInvasiveTrayIconHookCheckBox"
-                      Content="Enable invasive live tray icon hook"
-                      Margin="0,0,0,10" />
-            <CheckBox x:Name="EnableElevatedTrayIconHookAgentCheckBox"
-                      Content="Run tray hook agent elevated"
-                      Margin="0,0,0,10" />
-            <CheckBox x:Name="ShowAllTrayIconsCheckBox"
-                      Content="Show ALL tray icons"
-                      Margin="0,0,0,10" />
-            <CheckBox x:Name="UseNativeTaskbarRendererCheckBox"
-                      Content="Use experimental Win32/Direct2D renderer"
-                      Margin="0,0,0,10" />
-            <CheckBox x:Name="PauseUpdatesWhileFullscreenCheckBox"
-                      Content="Pause non-clock updates while fullscreen apps are running"
-                      Margin="0,0,0,10" />
-            <CheckBox x:Name="EnableExperimentalExplorerTaskbarHookCheckBox"
-                      Content="Enable experimental Explorer taskbar hook"
-                      Margin="0,0,0,10" />
-            <CheckBox x:Name="EnableExperimentalExplorerTaskbarMenuProxyCheckBox"
-                      Content="Enable experimental Explorer app menus"
-                      Margin="0,0,0,10" />
-            <Grid Margin="0,6,0,10">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="120" />
-                </Grid.ColumnDefinitions>
-                <TextBlock Text="App button alignment"
-                           VerticalAlignment="Center"
-                           Foreground="#202020" />
-                <ComboBox x:Name="TaskbarButtonAlignmentComboBox"
-                          Grid.Column="1"
-                          Height="28"
-                          VerticalContentAlignment="Center">
-                    <ComboBoxItem Content="Left" />
-                    <ComboBoxItem Content="Center" />
-                </ComboBox>
-            </Grid>
-            <Grid Margin="0,6,0,10">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="220" />
-                    <ColumnDefinition Width="56" />
-                </Grid.ColumnDefinitions>
-                <TextBlock Text="Taskbar scale"
-                           VerticalAlignment="Center"
-                           Foreground="#202020" />
-                <Slider x:Name="TaskbarScaleSlider"
-                        Grid.Column="1"
-                        Minimum="0.75"
-                        Maximum="1.75"
-                        TickFrequency="0.05"
-                        IsSnapToTickEnabled="True"
-                        VerticalAlignment="Center"
-                        ValueChanged="TaskbarScaleSlider_ValueChanged" />
-                <TextBlock x:Name="TaskbarScaleTextBlock"
-                           Grid.Column="2"
-                           TextAlignment="Right"
-                           VerticalAlignment="Center"
-                           Foreground="#202020" />
-            </Grid>
-            <Grid Margin="0,6,0,10">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="120" />
-                </Grid.ColumnDefinitions>
-                <TextBlock Text="Taskbar polling interval (ms)"
-                           VerticalAlignment="Center"
-                           Foreground="#202020" />
-                <TextBox x:Name="TaskbarPollingIntervalTextBox"
-                         Grid.Column="1"
-                         Height="28"
-                         VerticalContentAlignment="Center" />
-            </Grid>
-            <Grid Margin="0,0,0,10">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="120" />
-                </Grid.ColumnDefinitions>
-                <TextBlock Text="Tray geometry refresh interval (ms)"
-                           VerticalAlignment="Center"
-                           Foreground="#202020" />
-                <TextBox x:Name="TrayRefreshIntervalTextBox"
-                         Grid.Column="1"
-                         Height="28"
-                         VerticalContentAlignment="Center" />
-            </Grid>
-            <TextBlock Text="Settings apply immediately and are saved for the next launch."
-                       TextWrapping="Wrap"
-                       Foreground="#555555" />
-        </StackPanel>
+        <ScrollViewer Grid.Row="1"
+                      Margin="0,18,0,0"
+                      VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <GroupBox Header="Selected monitor settings"
+                          Margin="0,0,0,12"
+                          Padding="12"
+                          BorderBrush="#D0D0D0"
+                          Foreground="#202020">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="220" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Monitor"
+                                       VerticalAlignment="Center"
+                                       Foreground="#202020" />
+                            <ComboBox x:Name="MonitorComboBox"
+                                      Grid.Column="1"
+                                      Height="28"
+                                      DisplayMemberPath="Label"
+                                      VerticalContentAlignment="Center"
+                                      SelectionChanged="MonitorComboBox_SelectionChanged" />
+                        </Grid>
+                        <CheckBox x:Name="ShowOnlyThisMonitorCheckBox"
+                                  Content="Show only apps on this monitor"
+                                  Margin="0,0,0,10" />
+                        <CheckBox x:Name="MirrorPrimaryNotificationAreaCheckBox"
+                                  Content="Mirror primary notification area"
+                                  Margin="0,0,0,10" />
+                        <CheckBox x:Name="ShowClockCheckBox"
+                                  Content="Show clock"
+                                  Margin="0,0,0,10" />
+                        <Grid Margin="0,6,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="120" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="App button alignment"
+                                       VerticalAlignment="Center"
+                                       Foreground="#202020" />
+                            <ComboBox x:Name="TaskbarButtonAlignmentComboBox"
+                                      Grid.Column="1"
+                                      Height="28"
+                                      VerticalContentAlignment="Center">
+                                <ComboBoxItem Content="Left" />
+                                <ComboBoxItem Content="Center" />
+                            </ComboBox>
+                        </Grid>
+                        <Grid Margin="0,6,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="220" />
+                                <ColumnDefinition Width="56" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Taskbar scale"
+                                       VerticalAlignment="Center"
+                                       Foreground="#202020" />
+                            <Slider x:Name="TaskbarScaleSlider"
+                                    Grid.Column="1"
+                                    Minimum="0.75"
+                                    Maximum="1.75"
+                                    TickFrequency="0.05"
+                                    IsSnapToTickEnabled="True"
+                                    VerticalAlignment="Center"
+                                    ValueChanged="TaskbarScaleSlider_ValueChanged" />
+                            <TextBlock x:Name="TaskbarScaleTextBlock"
+                                       Grid.Column="2"
+                                       TextAlignment="Right"
+                                       VerticalAlignment="Center"
+                                       Foreground="#202020" />
+                        </Grid>
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="Global settings"
+                          Padding="12"
+                          BorderBrush="#D0D0D0"
+                          Foreground="#202020">
+                    <StackPanel>
+                        <CheckBox x:Name="EnableInvasiveTrayIconHookCheckBox"
+                                  Content="Enable invasive live tray icon hook"
+                                  Margin="0,0,0,10" />
+                        <CheckBox x:Name="EnableElevatedTrayIconHookAgentCheckBox"
+                                  Content="Run tray hook agent elevated"
+                                  Margin="0,0,0,10" />
+                        <CheckBox x:Name="ShowAllTrayIconsCheckBox"
+                                  Content="Show ALL tray icons"
+                                  Margin="0,0,0,10" />
+                        <CheckBox x:Name="PauseUpdatesWhileFullscreenCheckBox"
+                                  Content="Pause non-clock updates while fullscreen apps are running"
+                                  Margin="0,0,0,10" />
+                        <CheckBox x:Name="EnableExperimentalExplorerTaskbarHookCheckBox"
+                                  Content="Enable Explorer taskbar hook"
+                                  Margin="0,0,0,10" />
+                        <CheckBox x:Name="EnableExperimentalExplorerTaskbarButtonImageCaptureCheckBox"
+                                  Content="Enable experimental Explorer app icon screen capture"
+                                  Margin="0,0,0,10" />
+                        <Grid Margin="0,6,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="120" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Taskbar polling interval (ms)"
+                                       VerticalAlignment="Center"
+                                       Foreground="#202020" />
+                            <TextBox x:Name="TaskbarPollingIntervalTextBox"
+                                     Grid.Column="1"
+                                     Height="28"
+                                     VerticalContentAlignment="Center" />
+                        </Grid>
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="120" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Tray geometry refresh interval (ms)"
+                                       VerticalAlignment="Center"
+                                       Foreground="#202020" />
+                            <TextBox x:Name="TrayRefreshIntervalTextBox"
+                                     Grid.Column="1"
+                                     Height="28"
+                                     VerticalContentAlignment="Center" />
+                        </Grid>
+                        <TextBlock Text="Settings apply immediately and are saved for the next launch."
+                                   TextWrapping="Wrap"
+                                   Foreground="#555555" />
+                    </StackPanel>
+                </GroupBox>
+            </StackPanel>
+        </ScrollViewer>
 
         <StackPanel Grid.Row="2"
                     Orientation="Horizontal"

@@ -33,6 +33,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private const int TbpfPaused = 8;
     private const int MinimumUsableExplorerButtonImageBytes = 512;
     private const int MaxJumpListMenuItemTextLength = 96;
+    private const double NativeScaleBaseline = 1.5;
     private const float RenderTargetDpi = 96.0f;
     private static readonly string ExplorerButtonImageCacheDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -59,6 +60,9 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private readonly Dictionary<IntPtr, NativeOverlayIcon> _overlayCache = [];
     private readonly Dictionary<string, NativeTrayIconImage> _trayImageCache = [];
     private readonly Dictionary<string, NativeExplorerButtonImage> _explorerButtonImageCache = [];
+    private readonly Dictionary<string, TrayIconItem> _trayItemsByProcessPath = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, TrayIconItem> _trayItemsByProcessName = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _groupsWithExplorerButtonImage = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<TaskbarItem> _currentWindows = Array.Empty<TaskbarItem>();
     private IReadOnlyList<TaskbarItem> _visibleWindows = Array.Empty<TaskbarItem>();
     private IReadOnlyList<NativeTaskbarGroup> _visibleGroups = Array.Empty<NativeTaskbarGroup>();
@@ -458,6 +462,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             _appBar?.SetHeight(_height);
         }
 
+        UpdateClock();
         if (UpdateFullscreenPauseState())
         {
             QueueRender(allowWhilePaused: true);
@@ -481,8 +486,13 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return;
         }
 
-        var latestItems = TrayIconSnapshotStore.GetItems();
-        if (latestItems.Count == 0 && !AppSettingsService.Current.EnableInvasiveTrayIconHook)
+        var taskbarSettings = GetMonitorTaskbarSettings();
+        var latestItems = taskbarSettings.MirrorPrimaryNotificationArea
+            ? TrayIconSnapshotStore.GetItems()
+            : Array.Empty<TrayIconItem>();
+        if (latestItems.Count == 0 &&
+            taskbarSettings.MirrorPrimaryNotificationArea &&
+            !AppSettingsService.Current.EnableInvasiveTrayIconHook)
         {
             latestItems = _trayIconProvider.GetIcons();
         }
@@ -495,12 +505,48 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
         _trayVisualSignature = signature;
         _trayItems = latestItems;
+        RebuildTrayProcessLookups();
         RemoveUnusedTrayImages(_trayItems.Select(GetTrayKey).ToHashSet(StringComparer.Ordinal));
         QueueRender();
     }
 
+    private void RebuildTrayProcessLookups()
+    {
+        _trayItemsByProcessPath.Clear();
+        _trayItemsByProcessName.Clear();
+        foreach (var item in _trayItems)
+        {
+            if (item.Icon is null)
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(item.SourceProcessPath))
+            {
+                _trayItemsByProcessPath.TryAdd(NormalizePath(item.SourceProcessPath), item);
+            }
+
+            if (!string.IsNullOrWhiteSpace(item.SourceProcessName))
+            {
+                _trayItemsByProcessName.TryAdd(Path.GetFileNameWithoutExtension(item.SourceProcessName), item);
+            }
+        }
+    }
+
     private void UpdateClock()
     {
+        if (!GetMonitorTaskbarSettings().ShowClock)
+        {
+            if (_clockText.Length > 0)
+            {
+                _clockText = "";
+                QueueRender(allowWhilePaused: true);
+            }
+
+            ScheduleNextClockTick(DateTime.Now);
+            return;
+        }
+
         var now = DateTime.Now;
         var text = now.ToString("HH:mm");
         if (!string.Equals(_clockText, text, StringComparison.Ordinal))
@@ -541,10 +587,14 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return;
         }
 
-        var visibleWindowItems = AppSettingsService.Current.ShowOnlyAppsOnThisMonitor
+        var taskbarSettings = GetMonitorTaskbarSettings();
+        var showOnlyThisMonitor = taskbarSettings.ShowOnlyAppsOnThisMonitor;
+        var visibleWindowItems = showOnlyThisMonitor
             ? windows.Where(item => item.MonitorDeviceName == _screen.DeviceName).ToArray()
             : windows.ToArray();
-        _visibleWindows = ExplorerTaskbarSnapshotStore.MergePinnedItems(visibleWindowItems);
+        _visibleWindows = ExplorerTaskbarSnapshotStore.MergePinnedItems(
+            visibleWindowItems,
+            includePinnedOnly: !showOnlyThisMonitor);
         _visibleGroups = BuildWindowGroups(_visibleWindows);
 
         var visibleHandles = _visibleWindows
@@ -699,13 +749,6 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         var button = HitTestTaskbarButton(x, y);
         if (button is not null)
         {
-            var screenX = _screen.Bounds.Left + x;
-            var screenY = _screen.Bounds.Bottom - _height + y;
-            if (TryForwardExplorerTaskbarClick(button, rightClick: true, screenX, screenY))
-            {
-                return;
-            }
-
             ShowAppContextMenu(button.Group);
             return;
         }
@@ -822,6 +865,12 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         }
 
         _appContextMenu.Items.Clear();
+        var addedTaskbarItems = AddTaskbarMenuItems(group);
+        if (addedTaskbarItems)
+        {
+            _appContextMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+        }
+
         var addedJumpListItems = AddJumpListMenuItems(group);
         if (addedJumpListItems)
         {
@@ -880,6 +929,54 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         }
 
         _appContextMenu.Show(System.Windows.Forms.Control.MousePosition);
+    }
+
+    private bool AddTaskbarMenuItems(NativeTaskbarGroup group)
+    {
+        var added = false;
+        if (group.HasRunning)
+        {
+            var text = group.HasMultiple ? "Move all windows to this monitor" : "Move to this monitor";
+            _appContextMenu.Items.Add(text, null, (_, _) => MoveGroupToThisMonitor(group));
+            added = true;
+        }
+
+        return added;
+    }
+
+    private void MoveGroupToThisMonitor(NativeTaskbarGroup group)
+    {
+        var targetWorkArea = GetMoveTargetWorkArea();
+        var moved = 0;
+        foreach (var item in group.Items.Where(item => item.Hwnd != IntPtr.Zero))
+        {
+            if (WindowActions.MoveToMonitor(item.Hwnd, targetWorkArea))
+            {
+                moved++;
+            }
+        }
+
+        if (group.Representative.Hwnd != IntPtr.Zero)
+        {
+            WindowActions.Activate(group.Representative.Hwnd);
+        }
+
+        _windowTracker.Refresh();
+        DebugLogger.WriteIfChanged(
+            $"taskbar-move-group-{group.Key}",
+            $"Taskbar app group moved to monitor: Group={group.Key} Screen={_screen.DeviceName} Target={targetWorkArea} Moved={moved}");
+    }
+
+    private Rectangle GetMoveTargetWorkArea()
+    {
+        var area = _screen.WorkingArea;
+        var taskbarTop = _screen.Bounds.Bottom - _height;
+        if (area.Bottom > taskbarTop)
+        {
+            area.Height = Math.Max(1, taskbarTop - area.Top);
+        }
+
+        return area;
     }
 
     private void OpenPinnedGroup(NativeTaskbarGroup group)
@@ -1074,6 +1171,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
         _buttons.Clear();
         _trayButtons.Clear();
+        _groupsWithExplorerButtonImage.Clear();
         var trayLayout = GetTrayLayout();
         var pauseIndicatorWidth = GetPauseIndicatorWidth();
         var layout = GetLayout(trayLayout.StartX, pauseIndicatorWidth);
@@ -1110,7 +1208,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return;
         }
 
-        var scale = AppSettingsService.Current.TaskbarScale;
+        var scale = GetEffectiveTaskbarScale();
         var barWidth = Math.Max(2, (int)Math.Round(3 * scale));
         var barHeight = Math.Max(12, (int)Math.Round(15 * scale));
         var gap = Math.Max(3, (int)Math.Round(4 * scale));
@@ -1128,8 +1226,9 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private void RenderTrayButtons(ID2D1HwndRenderTarget target, NativeTrayLayout trayLayout)
     {
         var x = trayLayout.IconStartX;
-        foreach (var item in _trayItems.Take(trayLayout.VisibleIconCount))
+        for (var index = 0; index < trayLayout.VisibleIconCount; index++)
         {
+            var item = _trayItems[index];
             var key = GetTrayKey(item);
             var bounds = new Rectangle(x, trayLayout.ButtonY, trayLayout.ButtonWidth, trayLayout.ButtonHeight);
             if (key == _hoverTrayKey)
@@ -1208,10 +1307,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private static TaskbarButtonState GetGroupState(NativeTaskbarGroup group)
     {
         var fallback = TaskbarButtonState.Empty;
+        var representativeHwnd = group.Representative.Hwnd;
         foreach (var item in group.Items)
         {
             TaskbarStateSnapshotStore.TryGetState(item.Hwnd, out var state);
-            if (item.Hwnd == group.Representative.Hwnd)
+            if (item.Hwnd == representativeHwnd)
             {
                 fallback = state;
             }
@@ -1249,7 +1349,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
                 continue;
             }
 
-            var matchedTrayItem = _trayItems.FirstOrDefault(trayItem => IsSameProcess(trayItem, item));
+            var matchedTrayItem = FindTrayItemForTaskbarItem(item);
             if (matchedTrayItem?.Icon is null)
             {
                 continue;
@@ -1268,6 +1368,20 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         return null;
     }
 
+    private TrayIconItem? FindTrayItemForTaskbarItem(TaskbarItem taskbarItem)
+    {
+        if (!string.IsNullOrWhiteSpace(taskbarItem.ProcessPath) &&
+            _trayItemsByProcessPath.TryGetValue(NormalizePath(taskbarItem.ProcessPath), out var pathMatch))
+        {
+            return pathMatch;
+        }
+
+        return !string.IsNullOrWhiteSpace(taskbarItem.ProcessName) &&
+               _trayItemsByProcessName.TryGetValue(Path.GetFileNameWithoutExtension(taskbarItem.ProcessName), out var nameMatch)
+            ? nameMatch
+            : null;
+    }
+
     private static bool IsShellOwnedProcess(TaskbarItem taskbarItem)
     {
         var processName = Path.GetFileNameWithoutExtension(taskbarItem.ProcessName);
@@ -1277,25 +1391,6 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
         return string.Equals(processName, "explorer", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(fileName, "explorer.exe", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsSameProcess(TrayIconItem trayItem, TaskbarItem taskbarItem)
-    {
-        if (!string.IsNullOrWhiteSpace(trayItem.SourceProcessPath) &&
-            !string.IsNullOrWhiteSpace(taskbarItem.ProcessPath))
-        {
-            return string.Equals(
-                NormalizePath(trayItem.SourceProcessPath),
-                NormalizePath(taskbarItem.ProcessPath),
-                StringComparison.OrdinalIgnoreCase);
-        }
-
-        return !string.IsNullOrWhiteSpace(trayItem.SourceProcessName) &&
-               !string.IsNullOrWhiteSpace(taskbarItem.ProcessName) &&
-               string.Equals(
-                   Path.GetFileNameWithoutExtension(trayItem.SourceProcessName),
-                   taskbarItem.ProcessName,
-                   StringComparison.OrdinalIgnoreCase);
     }
 
     private static string NormalizePath(string path)
@@ -1314,8 +1409,13 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     {
         foreach (var button in _buttons)
         {
-            var bitmap = GetExplorerButtonImage(button.Group)?.Bitmap;
-            if (bitmap is null)
+            var explorerButtonImage = GetExplorerButtonImage(button.Group);
+            var bitmap = explorerButtonImage?.Bitmap;
+            if (explorerButtonImage is not null)
+            {
+                _groupsWithExplorerButtonImage.Add(button.Group.Key);
+            }
+            else
             {
                 bitmap = GetIcon(button.Group.Representative)?.Bitmap;
             }
@@ -1342,7 +1442,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     {
         foreach (var button in _buttons)
         {
-            if (GetExplorerButtonImage(button.Group) is not null)
+            if (_groupsWithExplorerButtonImage.Contains(button.Group.Key))
             {
                 continue;
             }
@@ -1386,16 +1486,19 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
                 null);
         }
 
-        EnsureClockTextFormat(trayLayout.ClockFontSize);
-        target.DrawText(
-            _clockText,
-            _clockTextFormat!,
-            new Vortice.Mathematics.Rect(
-                trayLayout.ClockBounds.Left,
-                trayLayout.ClockBounds.Top,
-                trayLayout.ClockBounds.Width,
-                trayLayout.ClockBounds.Height),
-            _clockTextBrush!);
+        if (trayLayout.ClockBounds.Width > 0)
+        {
+            EnsureClockTextFormat(trayLayout.ClockFontSize);
+            target.DrawText(
+                _clockText,
+                _clockTextFormat!,
+                new Vortice.Mathematics.Rect(
+                    trayLayout.ClockBounds.Left,
+                    trayLayout.ClockBounds.Top,
+                    trayLayout.ClockBounds.Width,
+                    trayLayout.ClockBounds.Height),
+                _clockTextBrush!);
+        }
     }
 
     private NativeAppIcon? GetIcon(TaskbarItem item)
@@ -1413,9 +1516,24 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             cached.Dispose();
         }
 
+        if (ShouldPreferManagedIcon(item) &&
+            TryCreateManagedIcon(item, out var managedIcon))
+        {
+            managedIcon.EnsureBitmap(_renderTarget!);
+            _iconCache[cacheKey] = managedIcon;
+            return managedIcon;
+        }
+
         var icon = WindowIconProvider.GetIconHandleCopy(item.Hwnd, item.ProcessPath, item.IconPath);
         if (icon == IntPtr.Zero)
         {
+            if (TryCreateManagedIcon(item, out managedIcon))
+            {
+                managedIcon.EnsureBitmap(_renderTarget!);
+                _iconCache[cacheKey] = managedIcon;
+                return managedIcon;
+            }
+
             _iconCache.Remove(cacheKey);
             return null;
         }
@@ -1431,9 +1549,32 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             ? $"hwnd:{item.Hwnd.ToInt64():X}"
             : $"pin:{item.GroupKey}";
 
+    private static bool ShouldPreferManagedIcon(TaskbarItem item) =>
+        item.Icon is not null &&
+        (PackageAppResolver.IsPackageAppId(item.AppUserModelId) ||
+         (!string.IsNullOrWhiteSpace(item.IconPath) &&
+          !string.Equals(item.IconPath, item.ProcessPath, StringComparison.OrdinalIgnoreCase)));
+
+    private static bool TryCreateManagedIcon(TaskbarItem item, out NativeAppIcon icon)
+    {
+        icon = default!;
+        if (item.Icon is null || CreateBitmapSource(item.Icon) is not { } bitmapSource)
+        {
+            return false;
+        }
+
+        icon = new NativeAppIcon(item.IconFingerprint, bitmapSource);
+        return true;
+    }
+
     private NativeExplorerButtonImage? GetExplorerButtonImage(NativeTaskbarGroup group)
     {
         if (!AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook)
+        {
+            return null;
+        }
+
+        if (!AppSettingsService.Current.EnableExperimentalExplorerTaskbarButtonImageCapture)
         {
             return null;
         }
@@ -1847,19 +1988,20 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return 0;
         }
 
-        return Math.Max(18, (int)Math.Round(24 * AppSettingsService.Current.TaskbarScale));
+        return Math.Max(18, (int)Math.Round(24 * GetEffectiveTaskbarScale()));
     }
 
     private NativeLayout GetLayout(int availableWidth, int leftReservedWidth)
     {
-        var scale = AppSettingsService.Current.TaskbarScale;
+        var taskbarSettings = GetMonitorTaskbarSettings();
+        var scale = GetEffectiveTaskbarScale();
         var buttonSize = Math.Min(_height, Math.Max(28, (int)Math.Round(36 * scale)));
         var iconSize = Math.Max(16, (int)Math.Round(20 * scale));
         var overlaySize = Math.Max(9, (int)Math.Round(11 * scale));
         var underlineWidth = Math.Max(10, (int)Math.Round(16 * scale));
         var totalWidth = buttonSize * _visibleGroups.Count;
         var appAreaWidth = Math.Max(0, availableWidth - leftReservedWidth);
-        var startX = string.Equals(AppSettingsService.Current.TaskbarButtonAlignment, "Center", StringComparison.OrdinalIgnoreCase)
+        var startX = string.Equals(taskbarSettings.TaskbarButtonAlignment, "Center", StringComparison.OrdinalIgnoreCase)
             ? leftReservedWidth + Math.Max(0, (appAreaWidth - totalWidth) / 2)
             : leftReservedWidth;
 
@@ -1877,21 +2019,28 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private NativeTrayLayout GetTrayLayout()
     {
-        var scale = AppSettingsService.Current.TaskbarScale;
+        var taskbarSettings = GetMonitorTaskbarSettings();
+        var scale = GetEffectiveTaskbarScale();
         var buttonWidth = Math.Max(22, (int)Math.Round(28 * scale));
         var buttonHeight = Math.Min(_height, Math.Max(28, (int)Math.Round(36 * scale)));
         var iconSize = Math.Max(12, (int)Math.Round(16 * scale));
-        var clockWidth = Math.Max(52, (int)Math.Round(62 * scale));
+        var clockWidth = taskbarSettings.ShowClock
+            ? Math.Max(52, (int)Math.Round(62 * scale))
+            : 0;
         var rightPadding = Math.Max(6, (int)Math.Round(8 * scale));
-        var maxTrayIconAreaWidth = Math.Max(0, _width / 2 - clockWidth - rightPadding);
+        var trayItemCount = taskbarSettings.MirrorPrimaryNotificationArea ? _trayItems.Count : 0;
+        var reservedRightPadding = taskbarSettings.ShowClock || trayItemCount > 0
+            ? rightPadding
+            : 0;
+        var maxTrayIconAreaWidth = Math.Max(0, _width / 2 - clockWidth - reservedRightPadding);
         var visibleTrayIconCount = Math.Min(
-            _trayItems.Count,
+            trayItemCount,
             buttonWidth == 0 ? 0 : maxTrayIconAreaWidth / buttonWidth);
-        var trayWidth = (visibleTrayIconCount * buttonWidth) + clockWidth + rightPadding;
+        var trayWidth = (visibleTrayIconCount * buttonWidth) + clockWidth + reservedRightPadding;
         var startX = Math.Max(0, _width - trayWidth);
         var buttonY = Math.Max(0, (_height - buttonHeight) / 2);
         var clockBounds = new RectangleF(
-            _width - rightPadding - clockWidth,
+            taskbarSettings.ShowClock ? _width - rightPadding - clockWidth : _width,
             0,
             clockWidth,
             _height);
@@ -1911,7 +2060,15 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private int GetTaskbarHeightPixels()
     {
-        return Math.Max(32, (int)Math.Round(40 * AppSettingsService.Current.TaskbarScale));
+        return Math.Max(32, (int)Math.Round(40 * GetEffectiveTaskbarScale()));
+    }
+
+    private MonitorTaskbarSettings GetMonitorTaskbarSettings() =>
+        AppSettingsService.GetMonitorTaskbarSettings(_screen.DeviceName);
+
+    private double GetEffectiveTaskbarScale()
+    {
+        return GetMonitorTaskbarSettings().TaskbarScale * NativeScaleBaseline;
     }
 
     private void EnsureRenderTarget()
@@ -2197,16 +2354,16 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
         public IReadOnlyList<TaskbarItem> Items { get; } = items;
 
-        public bool HasMultiple => Items.Count > 1;
+        public bool HasMultiple { get; } = items.Count > 1;
 
-        public bool HasRunning => Items.Any(item => item.Hwnd != IntPtr.Zero);
+        public bool HasRunning { get; } = items.Any(item => item.Hwnd != IntPtr.Zero);
 
-        public bool IsActive => Items.Any(item => item.Hwnd != IntPtr.Zero && item.IsActive);
+        public bool IsActive { get; } = items.Any(item => item.Hwnd != IntPtr.Zero && item.IsActive);
 
-        public TaskbarItem Representative =>
-            Items.FirstOrDefault(item => item.Hwnd != IntPtr.Zero && item.IsActive) ??
-            Items.FirstOrDefault(item => item.Hwnd != IntPtr.Zero) ??
-            Items.FirstOrDefault() ??
+        public TaskbarItem Representative { get; } =
+            items.FirstOrDefault(item => item.Hwnd != IntPtr.Zero && item.IsActive) ??
+            items.FirstOrDefault(item => item.Hwnd != IntPtr.Zero) ??
+            items.FirstOrDefault() ??
             throw new InvalidOperationException("Taskbar group must contain at least one item.");
     }
 
@@ -2235,17 +2392,41 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         int ClockFontSize,
         int CornerRadius);
 
-    private sealed class NativeAppIcon(string fingerprint, IntPtr handle) : IDisposable
+    private sealed class NativeAppIcon : IDisposable
     {
-        private IntPtr _handle = handle;
+        private IntPtr _handle;
+        private readonly BitmapSource? _sourceBitmap;
 
-        public string Fingerprint { get; } = fingerprint;
+        public NativeAppIcon(string fingerprint, IntPtr handle)
+        {
+            Fingerprint = fingerprint;
+            _handle = handle;
+        }
+
+        public NativeAppIcon(string fingerprint, BitmapSource sourceBitmap)
+        {
+            Fingerprint = fingerprint;
+            _sourceBitmap = sourceBitmap;
+        }
+
+        public string Fingerprint { get; }
 
         public ID2D1Bitmap? Bitmap { get; private set; }
 
         public void EnsureBitmap(ID2D1HwndRenderTarget target)
         {
-            if (Bitmap is not null || _handle == IntPtr.Zero)
+            if (Bitmap is not null)
+            {
+                return;
+            }
+
+            if (_sourceBitmap is not null)
+            {
+                Bitmap = CreateDirect2DBitmap(target, _sourceBitmap);
+                return;
+            }
+
+            if (_handle == IntPtr.Zero)
             {
                 return;
             }

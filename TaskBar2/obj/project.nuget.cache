@@ -1,11 +1,12 @@
 {
   "version": 2,
-  "dgSpecHash": "YdA52jZ/r5Q=",
+  "dgSpecHash": "xkuuNJlq9lw=",
   "success": true,
   "projectFilePath": "C:\\Users\\Jeremy\\source\\repos\\TaskBar2\\TaskBar2\\TaskBar2.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\Jeremy\\.nuget\\packages\\microsoft.data.sqlite\\10.0.9\\microsoft.data.sqlite.10.0.9.nupkg.sha512",
     "C:\\Users\\Jeremy\\.nuget\\packages\\microsoft.data.sqlite.core\\10.0.9\\microsoft.data.sqlite.core.10.0.9.nupkg.sha512",
+    "C:\\Users\\Jeremy\\.nuget\\packages\\openmcdf\\3.1.4\\openmcdf.3.1.4.nupkg.sha512",
     "C:\\Users\\Jeremy\\.nuget\\packages\\sharpgen.runtime\\2.4.2-beta\\sharpgen.runtime.2.4.2-beta.nupkg.sha512",
     "C:\\Users\\Jeremy\\.nuget\\packages\\sharpgen.runtime.com\\2.4.2-beta\\sharpgen.runtime.com.2.4.2-beta.nupkg.sha512",
     "C:\\Users\\Jeremy\\.nuget\\packages\\sqlitepclraw.bundle_e_sqlite3\\2.1.11\\sqlitepclraw.bundle_e_sqlite3.2.1.11.nupkg.sha512",
