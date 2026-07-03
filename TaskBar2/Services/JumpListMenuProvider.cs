@@ -10,6 +10,10 @@ namespace TaskBar2.Services;
 internal static class JumpListMenuProvider
 {
     private const int MaxEntriesPerSection = 8;
+    private const int MaxCachedSectionSets = 64;
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(15);
+    private static readonly object CacheSync = new();
+    private static readonly Dictionary<string, CachedSections> SectionCache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Guid ClsidApplicationDocumentLists = new("86BEC222-30F2-47E0-9F25-60D11CD75C28");
     private static readonly Guid IidIObjectArray = new("92CA9DCD-5622-4bba-A805-5E9F541BD8C9");
     private static readonly Guid IidIUnknown = new("00000000-0000-0000-C000-000000000046");
@@ -20,6 +24,33 @@ internal static class JumpListMenuProvider
     };
 
     public static IReadOnlyList<JumpListMenuSection> GetSections(IReadOnlyList<TaskbarItem> items)
+    {
+        var cacheKey = BuildCacheKey(items);
+        var now = DateTimeOffset.UtcNow;
+        lock (CacheSync)
+        {
+            if (SectionCache.TryGetValue(cacheKey, out var cached) &&
+                now - cached.CachedAt <= CacheDuration)
+            {
+                return cached.Sections;
+            }
+        }
+
+        var sections = BuildSections(items);
+        lock (CacheSync)
+        {
+            if (SectionCache.Count >= MaxCachedSectionSets)
+            {
+                SectionCache.Clear();
+            }
+
+            SectionCache[cacheKey] = new CachedSections(now, sections);
+        }
+
+        return sections;
+    }
+
+    private static IReadOnlyList<JumpListMenuSection> BuildSections(IReadOnlyList<TaskbarItem> items)
     {
         if (items.Count == 0)
         {
@@ -60,6 +91,28 @@ internal static class JumpListMenuProvider
         var destinationSections = GetDestinationSections(items);
         sections.AddRange(destinationSections);
         return sections;
+    }
+
+    private static string BuildCacheKey(IReadOnlyList<TaskbarItem> items)
+    {
+        if (items.Count == 0)
+        {
+            return "empty";
+        }
+
+        var parts = new List<string>(items.Count * 5);
+        foreach (var item in items.OrderBy(item => item.GroupKey, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(item => item.ProcessPath, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(item => item.LaunchPath, StringComparer.OrdinalIgnoreCase))
+        {
+            parts.Add(item.GroupKey);
+            parts.Add(item.AppUserModelId);
+            parts.Add(item.ProcessPath);
+            parts.Add(item.LaunchPath);
+            parts.Add(item.LaunchArguments);
+        }
+
+        return string.Join('\u001f', parts);
     }
 
     private static IReadOnlyList<JumpListMenuSection> MergeStaticTasksIntoCustomSections(
@@ -526,6 +579,8 @@ internal static class JumpListMenuProvider
         FileSystemPath = 0x80058000,
         DesktopAbsoluteParsing = 0x80028000
     }
+
+    private sealed record CachedSections(DateTimeOffset CachedAt, IReadOnlyList<JumpListMenuSection> Sections);
 
     [ComImport]
     [Guid("3C594F9F-9F30-47A1-979A-C9E83D3D0A06")]

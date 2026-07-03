@@ -691,27 +691,8 @@ internal static class ShellJumpListFileProvider
             return -1;
         }
 
-        for (var index = startAt; index <= haystack.Length - needle.Length; index++)
-        {
-            var matched = true;
-            for (var offset = 0; offset < needle.Length; offset++)
-            {
-                if (haystack[index + offset] == needle[offset])
-                {
-                    continue;
-                }
-
-                matched = false;
-                break;
-            }
-
-            if (matched)
-            {
-                return index;
-            }
-        }
-
-        return -1;
+        var relativeIndex = haystack.AsSpan(startAt).IndexOf(needle);
+        return relativeIndex < 0 ? -1 : startAt + relativeIndex;
     }
 
     private static string ReadString(Func<StringBuilder, int> read)
