@@ -33,6 +33,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private static readonly TimeSpan HoverPopupPollInterval = TimeSpan.FromMilliseconds(125);
     private static readonly TimeSpan HoverPopupCloseDelay = TimeSpan.FromMilliseconds(350);
     private static readonly TimeSpan ClosedPreviewRefreshDelay = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan TrayOverflowAutoCloseSuppressDuration = TimeSpan.FromMilliseconds(250);
     private const int TbpfNoProgress = 0;
     private const int TbpfIndeterminate = 1;
     private const int TbpfError = 4;
@@ -120,6 +121,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private int _height;
     private int _clockTextFormatSize;
     private string _suppressNextTrayLeftButtonUpKey = "";
+    private DateTime _suppressTrayOverflowOpenUntilUtc = DateTime.MinValue;
     private bool _renderQueued;
     private bool _nonClockUpdatesPaused;
     private bool _yieldingTopmostForFullscreen;
@@ -1060,6 +1062,12 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
         if (HitTestTrayOverflow(x, y))
         {
+            if (ShouldSuppressTrayOverflowToggle())
+            {
+                QueueRender();
+                return;
+            }
+
             ToggleTrayOverflowFlyout();
             return;
         }
@@ -1214,7 +1222,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             (item, rightClick) => ForwardTrayClick(item, rightClick),
             ForwardTrayDoubleClick);
         _trayOverflowFlyout = flyout;
-        flyout.Closed += (_, _) =>
+        flyout.Closed += (_, args) =>
         {
             if (ReferenceEquals(_trayOverflowFlyout, flyout))
             {
@@ -1222,7 +1230,12 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
                 QueueRender();
             }
 
-            flyout.Dispose();
+            if (IsTrayOverflowAutoClose(args.CloseReason))
+            {
+                _suppressTrayOverflowOpenUntilUtc = DateTime.UtcNow + TrayOverflowAutoCloseSuppressDuration;
+            }
+
+            DisposeTrayOverflowFlyoutAfterClose(flyout);
         };
         flyout.ShowNear(GetScreenBounds(_trayOverflowButton.Bounds), _screen.WorkingArea);
         QueueRender();
@@ -1257,6 +1270,31 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private bool IsTrayOverflowFlyoutVisible() =>
         _trayOverflowFlyout?.Visible == true;
+
+    private bool ShouldSuppressTrayOverflowToggle()
+    {
+        if (DateTime.UtcNow > _suppressTrayOverflowOpenUntilUtc)
+        {
+            return false;
+        }
+
+        _suppressTrayOverflowOpenUntilUtc = DateTime.MinValue;
+        return true;
+    }
+
+    private static bool IsTrayOverflowAutoClose(ToolStripDropDownCloseReason reason) =>
+        reason is ToolStripDropDownCloseReason.AppClicked or ToolStripDropDownCloseReason.AppFocusChange;
+
+    private void DisposeTrayOverflowFlyoutAfterClose(TrayOverflowFlyout flyout)
+    {
+        _ = _dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!flyout.IsDisposed)
+            {
+                flyout.Dispose();
+            }
+        }), DispatcherPriority.ApplicationIdle);
+    }
 
     private IReadOnlyList<TrayIconItem> GetTrayOverflowItems(NativeTrayLayout trayLayout)
     {
