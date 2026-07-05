@@ -204,7 +204,7 @@ namespace TaskBar2 {
                 return;
             }
             _contentLoaded = true;
-            System.Uri resourceLocater = new System.Uri("/TaskBar2;component/settingswindow.xaml", System.UriKind.Relative);
+            System.Uri resourceLocater = new System.Uri("/TaskBar2;V1.0.0.0;component/settingswindow.xaml", System.UriKind.Relative);
             
             #line 1 "..\..\..\SettingsWindow.xaml"
             System.Windows.Application.LoadComponent(this, resourceLocater);
