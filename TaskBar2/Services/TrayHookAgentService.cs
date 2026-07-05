@@ -18,7 +18,6 @@ internal sealed class TrayHookAgentService : IDisposable
     private readonly EventWaitHandle _globalStopEvent;
     private readonly AgentProcess _agent;
     private readonly AgentProcess _standardAgent;
-    private readonly AgentProcess _explorerAgent;
     private bool _disposed;
 
     public TrayHookAgentService(string pipeName)
@@ -36,7 +35,6 @@ internal sealed class TrayHookAgentService : IDisposable
 
         _agent = new AgentProcess(_pipeName, _globalStopEventName, _pauseEventName, "agent");
         _standardAgent = new AgentProcess(_pipeName, _globalStopEventName, _pauseEventName, "standard");
-        _explorerAgent = new AgentProcess(_pipeName, _globalStopEventName, _pauseEventName, "explorer");
     }
 
     public void ApplySettings()
@@ -46,10 +44,8 @@ internal sealed class TrayHookAgentService : IDisposable
             return;
         }
 
-        var enableTrayIconHook =
-            ShouldMirrorNotificationAreaOnAnySecondaryMonitor() &&
-            AppSettingsService.Current.EnableInvasiveTrayIconHook;
-        var enableExplorerTaskbarHook = AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook;
+        var enableTrayIconHook = ShouldMirrorNotificationAreaOnAnySecondaryMonitor();
+        const bool enableExplorerTaskbarHook = true;
         var enableExplorerTaskbarButtonImageCapture =
             AppSettingsService.Current.EnableExperimentalExplorerTaskbarButtonImageCapture;
 
@@ -60,7 +56,6 @@ internal sealed class TrayHookAgentService : IDisposable
             var splitElevatedTrayAgent = enableTrayIconHook && runElevated;
             var startMainAgent = enableTrayIconHook || (!splitElevatedTrayAgent && enableExplorerTaskbarHook);
             var startStandardAgent = splitElevatedTrayAgent;
-            var startExplorerAgent = false;
             var mainTargetMode = splitElevatedTrayAgent ? "ElevatedOnly" : "StandardOnly";
             var mainElevated = splitElevatedTrayAgent;
             var mainEnableTray = enableTrayIconHook;
@@ -88,10 +83,7 @@ internal sealed class TrayHookAgentService : IDisposable
                         standardEnableTray,
                         standardEnableExplorer,
                         standardEnableExplorer && enableExplorerTaskbarButtonImageCapture)
-                    : _standardAgent.IsRunning) ||
-                (startExplorerAgent
-                    ? _explorerAgent.RequiresRestart("StandardOnly", elevated: false, showAllTrayIcons: false, enableTrayIconHook: false, enableExplorerTaskbarHook: true, enableExplorerTaskbarButtonImageCapture)
-                    : _explorerAgent.IsRunning);
+                    : _standardAgent.IsRunning);
 
             if (needsRestart)
             {
@@ -124,16 +116,6 @@ internal sealed class TrayHookAgentService : IDisposable
                     standardEnableExplorer && enableExplorerTaskbarButtonImageCapture);
             }
 
-            if (startExplorerAgent)
-            {
-                _explorerAgent.Start(
-                    "StandardOnly",
-                    elevated: false,
-                    showAllTrayIcons: false,
-                    enableTrayIconHook: false,
-                    enableExplorerTaskbarHook: true,
-                    enableExplorerTaskbarButtonImageCapture);
-            }
         }
         else
         {
@@ -172,7 +154,6 @@ internal sealed class TrayHookAgentService : IDisposable
             : DateTimeOffset.UtcNow;
         _agent.SignalStop();
         _standardAgent.SignalStop();
-        _explorerAgent.SignalStop();
         if (signalInjectedHooks)
         {
             WaitForGlobalStopPulse(signaledAt);
@@ -180,7 +161,6 @@ internal sealed class TrayHookAgentService : IDisposable
 
         _agent.Stop();
         _standardAgent.Stop();
-        _explorerAgent.Stop();
         StopOwnedAgentProcesses();
         StopOwnedEasyHookServices();
 
@@ -595,19 +575,6 @@ internal sealed class TrayHookAgentService : IDisposable
     private static string? ResolveAgentPath()
     {
         var baseDirectory = AppContext.BaseDirectory;
-        var agentRoot = Path.Combine(baseDirectory, "TrayHookAgent");
-        var versionedCandidates = Directory.Exists(agentRoot)
-            ? Directory.EnumerateDirectories(agentRoot)
-                .Select(directory => new
-                {
-                    Path = Path.Combine(directory, "TaskBar2.TrayHook.Agent.exe"),
-                    LastWriteTimeUtc = Directory.GetLastWriteTimeUtc(directory)
-                })
-                .Where(candidate => File.Exists(candidate.Path))
-                .OrderByDescending(candidate => candidate.LastWriteTimeUtc)
-                .Select(candidate => candidate.Path)
-                .ToArray()
-            : [];
         var fixedCandidates = new[]
         {
             Path.Combine(baseDirectory, "TrayHookAgent", "Current", "TaskBar2.TrayHook.Agent.exe"),
@@ -627,10 +594,7 @@ internal sealed class TrayHookAgentService : IDisposable
                 "TaskBar2.TrayHook.Agent.exe"))
         };
 
-        return versionedCandidates
-            .Concat(fixedCandidates)
-            .Where(File.Exists)
-            .FirstOrDefault();
+        return fixedCandidates.FirstOrDefault(File.Exists);
     }
 
     private static string QuoteArgument(string argument)

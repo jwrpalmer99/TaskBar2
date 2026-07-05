@@ -8,7 +8,7 @@ namespace TaskBar2.Services;
 internal static class FullscreenApplicationDetector
 {
     private const int BoundsTolerance = 3;
-    private static readonly TimeSpan CacheDuration = TimeSpan.FromMilliseconds(350);
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan ProcessNameCacheDuration = TimeSpan.FromMinutes(2);
     private static readonly object Sync = new();
     private static readonly int CurrentProcessId = Environment.ProcessId;
@@ -217,7 +217,7 @@ internal static class FullscreenApplicationDetector
             return false;
         }
 
-        var title = GetWindowTitle(hwnd);
+        var title = DebugLogger.IsEnabled ? GetWindowTitle(hwnd) : "";
         var processName = GetProcessName(processId);
         info = new FullscreenWindowInfo
         {
@@ -414,10 +414,14 @@ internal static class FullscreenApplicationDetector
         Math.Abs(left.Right - right.Right) <= BoundsTolerance &&
         Math.Abs(left.Bottom - right.Bottom) <= BoundsTolerance;
 
+#if DEBUG
     private static string BuildDescription(FullscreenWindowInfo info) =>
         $"Hwnd=0x{info.Hwnd.ToInt64():X} Process={info.ProcessName} Title=\"{info.Title}\" Class={info.ClassName} " +
         $"Foreground={info.IsForeground} Rect={FormatRect(info.WindowRect)} Monitor={FormatRect(info.MonitorRect)} " +
         $"Style=0x{info.Style:X} ExStyle=0x{info.ExStyle:X} ShellSignal={info.ShellSignal}";
+#else
+    private static string BuildDescription(FullscreenWindowInfo info) => "";
+#endif
 
     private static string FormatRect(NativeMethods.Rect rect) =>
         $"{rect.Left},{rect.Top},{rect.Right},{rect.Bottom}";

@@ -8,7 +8,6 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationIcon>Assets\TaskBar2.ico</ApplicationIcon>
-    <TrayHookPayloadStamp>$([System.DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))</TrayHookPayloadStamp>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,7 +24,7 @@
     <ItemGroup>
       <TrayHookAgentFiles Include="..\TrayHook\TaskBar2.TrayHook.Agent\bin\$(Configuration)\net48\**\*.*" />
     </ItemGroup>
-    <Copy SourceFiles="@(TrayHookAgentFiles)" DestinationFiles="@(TrayHookAgentFiles->'$(OutputPath)TrayHookAgent\$(TrayHookPayloadStamp)\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(TrayHookAgentFiles)" DestinationFiles="@(TrayHookAgentFiles->'$(OutputPath)TrayHookAgent\Current\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

@@ -65,7 +65,6 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private readonly WindowTracker _windowTracker;
     private readonly System.Windows.Forms.ContextMenuStrip _contextMenu = new();
     private readonly System.Windows.Forms.ContextMenuStrip _appContextMenu = new();
-    private readonly NativeTrayIconProvider _trayIconProvider = new();
     private readonly DispatcherTimer _clockTimer;
     private readonly DispatcherTimer _trayRefreshTimer;
     private readonly DispatcherTimer _renderTimer;
@@ -242,7 +241,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_SHOW);
         NativeMethods.UpdateWindow(_hwnd);
         _clockTimer.Start();
-        _trayRefreshTimer.Start();
+        UpdateTrayRefreshTimerState();
         _fullscreenPauseTimer.Start();
         UpdateFullscreenPauseState();
         QueueRender(allowWhilePaused: true);
@@ -424,11 +423,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         }
 
         DebugLogger.Write($"Native taskbar non-clock updates resumed: Screen={_screen.DeviceName}");
-        if (!_trayRefreshTimer.IsEnabled)
-        {
-            _trayRefreshTimer.Start();
-        }
-
+        UpdateTrayRefreshTimerState();
         if (_autoHideEnabled && !_autoHideTimer.IsEnabled)
         {
             _autoHideTimer.Start();
@@ -810,6 +805,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
         FullscreenApplicationDetector.Invalidate();
         _trayRefreshTimer.Interval = TimeSpan.FromMilliseconds(AppSettingsService.Current.TrayRefreshIntervalMs);
+        UpdateTrayRefreshTimerState();
         _groupFlyoutTimer.Interval = TimeSpan.FromMilliseconds(AppSettingsService.Current.TaskbarThumbnailHoverDelayMs);
         if (!AppSettingsService.Current.ShowTaskbarThumbnailsOnHover)
         {
@@ -863,6 +859,22 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         QueueRender(allowWhilePaused: true);
     }
 
+    private void UpdateTrayRefreshTimerState()
+    {
+        if (_disposed ||
+            _nonClockUpdatesPaused ||
+            !GetMonitorTaskbarSettings().MirrorPrimaryNotificationArea)
+        {
+            _trayRefreshTimer.Stop();
+            return;
+        }
+
+        if (!_trayRefreshTimer.IsEnabled)
+        {
+            _trayRefreshTimer.Start();
+        }
+    }
+
     private void RefreshTray(bool force = false)
     {
         if (_disposed)
@@ -879,13 +891,6 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         var latestItems = taskbarSettings.MirrorPrimaryNotificationArea
             ? TrayIconSnapshotStore.GetItems()
             : Array.Empty<TrayIconItem>();
-        if (latestItems.Count == 0 &&
-            taskbarSettings.MirrorPrimaryNotificationArea &&
-            !AppSettingsService.Current.EnableInvasiveTrayIconHook)
-        {
-            latestItems = _trayIconProvider.GetIcons();
-        }
-
         var previousSignature = _trayVisualSignature;
         var signature = BuildTrayVisualSignature(latestItems);
         _trayVisualSignature = signature;
@@ -1229,8 +1234,6 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         {
             return;
         }
-
-        _trayIconProvider.ForwardClick(item, rightClick);
     }
 
     private void ForwardTrayDoubleClick(TrayIconItem item)
@@ -1239,8 +1242,6 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         {
             return;
         }
-
-        _trayIconProvider.ForwardClick(item, rightClick: false, doubleClick: true);
     }
 
     private void ToggleTrayOverflowFlyout()
@@ -2557,11 +2558,6 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
     private NativeExplorerButtonImage? GetExplorerButtonImage(NativeTaskbarGroup group)
     {
-        if (!AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook)
-        {
-            return null;
-        }
-
         if (!AppSettingsService.Current.EnableExperimentalExplorerTaskbarButtonImageCapture)
         {
             return null;

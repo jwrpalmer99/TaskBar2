@@ -47,6 +47,7 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
     private static SetOverlayIconDelegate? _originalSetOverlayIcon;
     private static string _pipeName = "";
     private static string _pauseEventName = "";
+    private static bool _showAllTrayIcons;
     private static bool _enableExplorerTaskbarButtonImageCapture;
     private static readonly ConcurrentDictionary<IntPtr, LocalHook> TaskbarMethodHooks = [];
     private static int _unknownMessageSequence;
@@ -61,10 +62,12 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
         string stopEventName,
         string globalStopEventName,
         string pauseEventName,
+        bool showAllTrayIcons,
         bool enableExplorerTaskbarButtonImageCapture)
     {
         _pipeName = pipeName;
         _pauseEventName = pauseEventName;
+        _showAllTrayIcons = showAllTrayIcons;
         _enableExplorerTaskbarButtonImageCapture = enableExplorerTaskbarButtonImageCapture;
     }
 
@@ -74,12 +77,14 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
         string stopEventName,
         string globalStopEventName,
         string pauseEventName,
+        bool showAllTrayIcons,
         bool enableExplorerTaskbarButtonImageCapture)
     {
         _pipeName = pipeName;
         _pauseEventName = pauseEventName;
+        _showAllTrayIcons = showAllTrayIcons;
         _enableExplorerTaskbarButtonImageCapture = enableExplorerTaskbarButtonImageCapture;
-        InjecteeLog.Write($"Injectee Run entered. ProcessId={Process.GetCurrentProcess().Id} ProcessName={Process.GetCurrentProcess().ProcessName} Pipe={pipeName} PauseEvent={_pauseEventName} EnableExplorerTaskbarButtonImageCapture={_enableExplorerTaskbarButtonImageCapture}");
+        InjecteeLog.Write($"Injectee Run entered. ProcessId={Process.GetCurrentProcess().Id} ProcessName={Process.GetCurrentProcess().ProcessName} Pipe={pipeName} PauseEvent={_pauseEventName} ShowAllTrayIcons={_showAllTrayIcons} EnableExplorerTaskbarButtonImageCapture={_enableExplorerTaskbarButtonImageCapture}");
         using var stopEvent = EventWaitHandle.OpenExisting(stopEventName);
         using var globalStopEvent = EventWaitHandle.OpenExisting(globalStopEventName);
         using var aliveEvent = CreateAliveEvent();
@@ -382,7 +387,7 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
 
         try
         {
-            var snapshot = NotifyIconDataReader.Read(shellMessage, data, unicode);
+            var snapshot = NotifyIconDataReader.Read(shellMessage, data, unicode, _showAllTrayIcons);
             if (snapshot is null)
             {
                 return;
@@ -919,7 +924,7 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
 
     private static class NotifyIconDataReader
     {
-        public static NotifyIconSnapshot? Read(uint shellMessage, IntPtr data, bool unicode)
+        public static NotifyIconSnapshot? Read(uint shellMessage, IntPtr data, bool unicode, bool showAllTrayIcons)
         {
             var cbSize = ReadUInt32(data, 0, 4);
             if (cbSize < 20)
@@ -943,6 +948,7 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
             var state = (flags & NifState) != 0 ? ReadUInt32(data, offsets.State, cbSize) : 0;
             var stateMask = (flags & NifState) != 0 ? ReadUInt32(data, offsets.StateMask, cbSize) : 0;
             var hiddenStateKnown = (flags & NifState) != 0 && (stateMask & NisHidden) != 0;
+            var hidden = hiddenStateKnown && (state & NisHidden) != 0;
             var notificationVersion = shellMessage == NimSetVersion
                 ? unchecked((int)ReadUInt32(data, offsets.Version, cbSize))
                 : 0;
@@ -960,8 +966,10 @@ public sealed class TrayIconHookEntryPoint : IEntryPoint
                 CallbackMessage = callbackMessage,
                 NotificationVersion = notificationVersion,
                 ToolTip = toolTip,
-                IconPngBase64 = iconHandle == IntPtr.Zero ? null : IconEncoder.ToPngBase64(iconHandle),
-                Hidden = hiddenStateKnown && (state & NisHidden) != 0,
+                IconPngBase64 = iconHandle == IntPtr.Zero || (hidden && !showAllTrayIcons)
+                    ? null
+                    : IconEncoder.ToPngBase64(iconHandle),
+                Hidden = hidden,
                 HiddenStateKnown = hiddenStateKnown,
                 SourceProcessId = ProcessIdentity.Id,
                 SourceProcessName = ProcessIdentity.Name,

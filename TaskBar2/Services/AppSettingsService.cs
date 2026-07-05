@@ -19,8 +19,6 @@ internal sealed class AppSettings
 
     public int TrayRefreshIntervalMs { get; set; } = AppSettingsService.DefaultTrayRefreshIntervalMs;
 
-    public bool EnableInvasiveTrayIconHook { get; set; }
-
     public bool EnableElevatedTrayIconHookAgent { get; set; }
 
     public bool ShowAllTrayIcons { get; set; }
@@ -32,8 +30,6 @@ internal sealed class AppSettings
     public bool ShowTaskbarThumbnailsOnHover { get; set; } = true;
 
     public int TaskbarThumbnailHoverDelayMs { get; set; } = AppSettingsService.DefaultTaskbarThumbnailHoverDelayMs;
-
-    public bool EnableExperimentalExplorerTaskbarHook { get; set; } = true;
 
     public bool EnableExperimentalExplorerTaskbarButtonImageCapture { get; set; }
 }

@@ -126,9 +126,6 @@
                           BorderBrush="#D0D0D0"
                           Foreground="#202020">
                     <StackPanel>
-                        <CheckBox x:Name="EnableInvasiveTrayIconHookCheckBox"
-                                  Content="Enable invasive live tray icon hook"
-                                  Margin="0,0,0,10" />
                         <CheckBox x:Name="EnableElevatedTrayIconHookAgentCheckBox"
                                   Content="Run tray hook agent elevated"
                                   Margin="0,0,0,10" />
@@ -157,9 +154,6 @@
                                      Height="28"
                                      VerticalContentAlignment="Center" />
                         </Grid>
-                        <CheckBox x:Name="EnableExperimentalExplorerTaskbarHookCheckBox"
-                                  Content="Enable Explorer taskbar hook"
-                                  Margin="0,0,0,10" />
                         <CheckBox x:Name="EnableExperimentalExplorerTaskbarButtonImageCaptureCheckBox"
                                   Content="Enable experimental Explorer app icon screen capture"
                                   Margin="0,0,0,10" />

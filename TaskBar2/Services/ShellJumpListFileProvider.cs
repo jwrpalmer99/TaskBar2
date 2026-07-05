@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Runtime.InteropServices.ComTypes;
 using System.Text;
 using OpenMcdf;
 using TaskBar2.Models;
@@ -574,58 +573,20 @@ internal static class ShellJumpListFileProvider
             return false;
         }
 
-        object? shellLinkObject = null;
-        IStream? stream = null;
-        try
-        {
-            shellLinkObject = new ShellLink();
-            var hr = CreateStreamOnHGlobal(IntPtr.Zero, fDeleteOnRelease: true, out stream);
-            if (hr < 0 || stream is null)
-            {
-                return false;
-            }
-
-            stream.Write(linkBytes, linkBytes.Length, IntPtr.Zero);
-            stream.Seek(0, 0, IntPtr.Zero);
-
-            hr = ((IPersistStream)shellLinkObject).Load(stream);
-            if (hr < 0)
-            {
-                return false;
-            }
-
-            var shellLink = (IShellLinkW)shellLinkObject;
-            var targetPath = NormalizePath(ReadString(builder => shellLink.GetPath(builder, builder.Capacity, IntPtr.Zero, 0)));
-            var arguments = ReadString(builder => shellLink.GetArguments(builder, builder.Capacity));
-            var workingDirectory = NormalizePath(ReadString(builder => shellLink.GetWorkingDirectory(builder, builder.Capacity)));
-            var description = ReadString(builder => shellLink.GetDescription(builder, builder.Capacity));
-            var title = ReadPropertyTitle(shellLinkObject);
-            if (string.IsNullOrWhiteSpace(title))
-            {
-                title = ReadEmbeddedDisplayTitle(linkBytes, targetPath, arguments);
-            }
-
-            var iconPath = ReadIconLocation(shellLink, out var iconIndex);
-
-            link = new ShellLinkInfo(targetPath, arguments, workingDirectory, title, description, iconPath, iconIndex);
-            return !string.IsNullOrWhiteSpace(targetPath);
-        }
-        catch (Exception exception) when (exception is COMException or ArgumentException or IOException or UnauthorizedAccessException)
+        if (!ShellLinkReader.TryLoadBytes(linkBytes, ReadPropertyTitle, out link))
         {
             return false;
         }
-        finally
-        {
-            if (stream is not null && Marshal.IsComObject(stream))
-            {
-                Marshal.FinalReleaseComObject(stream);
-            }
 
-            if (shellLinkObject is not null && Marshal.IsComObject(shellLinkObject))
+        if (string.IsNullOrWhiteSpace(link.Title))
+        {
+            link = link with
             {
-                Marshal.FinalReleaseComObject(shellLinkObject);
-            }
+                Title = ReadEmbeddedDisplayTitle(linkBytes, link.TargetPath, link.Arguments)
+            };
         }
+
+        return !string.IsNullOrWhiteSpace(link.TargetPath);
     }
 
     private static string ReadEmbeddedDisplayTitle(byte[] linkBytes, string targetPath, string arguments)
@@ -771,14 +732,6 @@ internal static class ShellJumpListFileProvider
         {
             NativeMethods.PropVariantClear(ref propVariant);
         }
-    }
-
-    private static string ReadIconLocation(IShellLinkW shellLink, out int iconIndex)
-    {
-        var builder = new StringBuilder(4096);
-        return shellLink.GetIconLocation(builder, builder.Capacity, out iconIndex) >= 0
-            ? NormalizePath(builder.ToString())
-            : "";
     }
 
     private static string GetEntryTitle(ShellLinkInfo link)
@@ -1095,105 +1048,6 @@ internal static class ShellJumpListFileProvider
                 $"Jump List destination launch failed: Path={path} Args={arguments} {exception.GetType().Name}: {exception.Message}");
         }
     }
-
-    [DllImport("ole32.dll")]
-    private static extern int CreateStreamOnHGlobal(IntPtr hGlobal, [MarshalAs(UnmanagedType.Bool)] bool fDeleteOnRelease, out IStream stream);
-
-    [ComImport]
-    [Guid("00021401-0000-0000-C000-000000000046")]
-    private sealed class ShellLink
-    {
-    }
-
-    [ComImport]
-    [Guid("00000109-0000-0000-C000-000000000046")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IPersistStream
-    {
-        [PreserveSig]
-        int GetClassID(out Guid classId);
-
-        [PreserveSig]
-        int IsDirty();
-
-        [PreserveSig]
-        int Load(IStream stream);
-
-        [PreserveSig]
-        int Save(IStream stream, [MarshalAs(UnmanagedType.Bool)] bool clearDirty);
-
-        [PreserveSig]
-        int GetSizeMax(out long size);
-    }
-
-    [ComImport]
-    [Guid("000214F9-0000-0000-C000-000000000046")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IShellLinkW
-    {
-        [PreserveSig]
-        int GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder file, int maxPath, IntPtr findData, uint flags);
-
-        [PreserveSig]
-        int GetIDList(out IntPtr pidl);
-
-        [PreserveSig]
-        int SetIDList(IntPtr pidl);
-
-        [PreserveSig]
-        int GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder name, int maxName);
-
-        [PreserveSig]
-        int SetDescription([MarshalAs(UnmanagedType.LPWStr)] string name);
-
-        [PreserveSig]
-        int GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder directory, int maxPath);
-
-        [PreserveSig]
-        int SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string directory);
-
-        [PreserveSig]
-        int GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder arguments, int maxPath);
-
-        [PreserveSig]
-        int SetArguments([MarshalAs(UnmanagedType.LPWStr)] string arguments);
-
-        [PreserveSig]
-        int GetHotkey(out short hotkey);
-
-        [PreserveSig]
-        int SetHotkey(short hotkey);
-
-        [PreserveSig]
-        int GetShowCmd(out int showCommand);
-
-        [PreserveSig]
-        int SetShowCmd(int showCommand);
-
-        [PreserveSig]
-        int GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder iconPath, int iconPathCount, out int iconIndex);
-
-        [PreserveSig]
-        int SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string iconPath, int iconIndex);
-
-        [PreserveSig]
-        int SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, uint reserved);
-
-        [PreserveSig]
-        int Resolve(IntPtr hwnd, uint flags);
-
-        [PreserveSig]
-        int SetPath([MarshalAs(UnmanagedType.LPWStr)] string file);
-    }
-
-    private sealed record ShellLinkInfo(
-        string TargetPath,
-        string Arguments,
-        string WorkingDirectory,
-        string Title,
-        string Description,
-        string IconPath,
-        int IconIndex);
 
     private sealed record ShellDestinationEntry(
         string SectionTitle,

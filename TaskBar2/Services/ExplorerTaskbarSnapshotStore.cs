@@ -153,11 +153,6 @@ internal static class ExplorerTaskbarSnapshotStore
         out IReadOnlyList<TaskbarItem> orderedItems)
     {
         orderedItems = Array.Empty<TaskbarItem>();
-        if (!AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook)
-        {
-            return false;
-        }
-
         RefreshAutomationSnapshotIfHookIsStale();
 
         ExplorerTaskbarButtonItem[] buttons;
@@ -591,9 +586,7 @@ internal static class ExplorerTaskbarSnapshotStore
 
     public static bool TryForwardClick(IReadOnlyList<TaskbarItem> groupItems, bool rightClick, int anchorX, int anchorY)
     {
-        if (rightClick ||
-            !AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook ||
-            groupItems.Count == 0)
+        if (rightClick || groupItems.Count == 0)
         {
             return false;
         }
@@ -669,8 +662,7 @@ internal static class ExplorerTaskbarSnapshotStore
     public static bool TryGetButtonImage(IReadOnlyList<TaskbarItem> groupItems, out ExplorerTaskbarButtonImage image)
     {
         image = default;
-        if (!AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook ||
-            !AppSettingsService.Current.EnableExperimentalExplorerTaskbarButtonImageCapture ||
+        if (!AppSettingsService.Current.EnableExperimentalExplorerTaskbarButtonImageCapture ||
             groupItems.Count == 0)
         {
             return false;

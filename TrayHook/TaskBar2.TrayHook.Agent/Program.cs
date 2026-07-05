@@ -442,6 +442,7 @@ internal sealed class HookAgent
                 _injecteeStopEventName,
                 _globalStopEventName,
                 _pauseEventName,
+                _targetCatalog.ShowAllTrayIcons,
                 _enableExplorerTaskbarButtonImageCapture);
 
             _injectedProcessIds.Add(process.Id);

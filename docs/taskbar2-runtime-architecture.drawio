@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="26.0.0">
+  <diagram name="Runtime overview">
+    <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1700" pageHeight="960" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="TaskBar2 runtime overview" style="text;html=1;strokeColor=none;fillColor=none;fontSize=26;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="500" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="External sources" style="text;html=1;strokeColor=none;fillColor=none;fontSize=15;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="80" width="180" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="Collectors" style="text;html=1;strokeColor=none;fillColor=none;fontSize=15;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="330" y="80" width="180" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="State and merge" style="text;html=1;strokeColor=none;fillColor=none;fontSize=15;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="670" y="80" width="180" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="Renderer and interaction" style="text;html=1;strokeColor=none;fillColor=none;fontSize=15;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="1010" y="80" width="220" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="Outputs" style="text;html=1;strokeColor=none;fillColor=none;fontSize=15;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="1370" y="80" width="160" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="Explorer.exe + application windows&#xa;real taskbar buttons, live windows, app processes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="130" width="230" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="Windows shell data&#xa;pinned shortcuts, Jump Lists, tray visibility registry" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="40" y="270" width="230" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="User input and settings&#xa;click, right-click, hover, per-monitor settings" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="420" width="230" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="Fullscreen / borderless apps&#xa;pause updates or yield z-order" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="40" y="560" width="230" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="TaskbarApplicationController&#xa;starts services, creates one native taskbar per secondary monitor" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="330" y="130" width="260" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="13" value="WindowTracker&#xa;WinEvent hooks + EnumWindows + app identity + icon resolution" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="330" y="260" width="260" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="14" value="TrayHookAgentService&#xa;starts standard/elevated EasyHook agents" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="330" y="390" width="260" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="15" value="Injected hook payload&#xa;Shell_NotifyIcon, ITaskbarList, Explorer taskbar snapshots" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="330" y="520" width="260" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="16" value="TrayIconHookServer&#xa;named pipe JSON bridge from injected processes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="330" y="670" width="260" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="17" value="Snapshot stores&#xa;Tray icons, taskbar badges/progress, Explorer button order/images" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="670" y="190" width="280" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="18" value="Pinned/app merge&#xa;open windows + Explorer order + pinned shortcuts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="670" y="350" width="280" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="19" value="JumpListMenuProvider&#xa;Chromium history, custom/automatic destinations, COM fallback" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="670" y="500" width="280" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="20" value="HookProcessingPauseService&#xa;shared pause event for server, agents and window polling" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="670" y="660" width="280" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="21" value="NativeSecondaryTaskbarWindow&#xa;Win32 window + AppBar + Direct2D drawing" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1010" y="210" width="290" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="22" value="Menus and flyouts&#xa;Jump list menus, hover thumbnails, tray overflow" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="1010" y="390" width="290" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="23" value="FullscreenApplicationDetector&#xa;decides pause vs browser-style z-order yield" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="1010" y="570" width="290" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="24" value="Secondary monitor taskbar UI&#xa;app buttons, tray icons, clock, theme, opacity, auto-hide" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1370" y="220" width="280" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="25" value="Real app effects&#xa;activate/minimize/close windows, launch pinned apps, forward tray clicks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="1370" y="430" width="280" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="26" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.4;entryX=0;entryY=0.5;" edge="1" parent="1" source="12" target="13">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="27" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.7;entryX=0;entryY=0.5;" edge="1" parent="1" source="12" target="14">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="28" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.25;entryX=0;entryY=0.5;" edge="1" parent="1" source="12" target="21">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="29" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.4;entryX=0;entryY=0.2;" edge="1" parent="1" source="8" target="13">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="30" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.65;entryX=0;entryY=0.5;" edge="1" parent="1" source="8" target="15">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="31" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.7;" edge="1" parent="1" source="10" target="12">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="32" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="14" target="15">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="33" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="15" target="16">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="34" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.35;entryX=0;entryY=0.75;" edge="1" parent="1" source="16" target="17">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="35" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.8;entryX=0;entryY=0.3;" edge="1" parent="1" source="13" target="18">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="36" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.35;entryX=0;entryY=0.35;" edge="1" parent="1" source="17" target="21">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="37" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.65;" edge="1" parent="1" source="18" target="21">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="38" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="9" target="19">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="300" y="320" />
+              <mxPoint x="300" y="650" />
+              <mxPoint x="650" y="650" />
+              <mxPoint x="650" y="550" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="39" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.65;" edge="1" parent="1" source="19" target="22">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="41" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="21" target="24">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="42" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.55;entryX=0;entryY=0.45;" edge="1" parent="1" source="21" target="25">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="43" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.6;entryX=0;entryY=0.7;" edge="1" parent="1" source="22" target="25">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="44" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="11" target="23">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="45" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="23" target="20">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="46" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.8;entryY=1;" edge="1" parent="1" source="20" target="16">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="810" y="830" />
+              <mxPoint x="540" y="830" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="48" value="Legend" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#666666;verticalAlign=top;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="820" width="670" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="49" value="" style="rounded=0;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="48">
+          <mxGeometry x="15" y="35" width="28" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="50" value="Main process" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="48">
+          <mxGeometry x="52" y="32" width="110" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="51" value="" style="rounded=0;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="48">
+          <mxGeometry x="170" y="35" width="28" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="52" value="Hook path" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="48">
+          <mxGeometry x="207" y="32" width="90" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="53" value="" style="rounded=0;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="48">
+          <mxGeometry x="305" y="35" width="28" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="54" value="Cached state / merge" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="48">
+          <mxGeometry x="342" y="32" width="130" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="55" value="" style="rounded=0;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="48">
+          <mxGeometry x="485" y="35" width="28" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="56" value="Fullscreen pause" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="48">
+          <mxGeometry x="522" y="32" width="120" height="22" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

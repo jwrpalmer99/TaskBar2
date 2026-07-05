@@ -14,14 +14,12 @@ public partial class SettingsWindow : Window
         InitializeComponent();
         PopulateMonitors();
         LoadSelectedMonitorSettings();
-        EnableInvasiveTrayIconHookCheckBox.IsChecked = AppSettingsService.Current.EnableInvasiveTrayIconHook;
         EnableElevatedTrayIconHookAgentCheckBox.IsChecked = AppSettingsService.Current.EnableElevatedTrayIconHookAgent;
         ShowAllTrayIconsCheckBox.IsChecked = AppSettingsService.Current.ShowAllTrayIcons;
         PauseUpdatesWhileFullscreenCheckBox.IsChecked = AppSettingsService.Current.PauseNonClockUpdatesWhileFullscreen;
         SuspendHookProcessingWhileFullscreenCheckBox.IsChecked = AppSettingsService.Current.SuspendHookProcessingWhileFullscreen;
         ShowTaskbarThumbnailsOnHoverCheckBox.IsChecked = AppSettingsService.Current.ShowTaskbarThumbnailsOnHover;
         TaskbarThumbnailHoverDelayTextBox.Text = AppSettingsService.Current.TaskbarThumbnailHoverDelayMs.ToString();
-        EnableExperimentalExplorerTaskbarHookCheckBox.IsChecked = AppSettingsService.Current.EnableExperimentalExplorerTaskbarHook;
         EnableExperimentalExplorerTaskbarButtonImageCaptureCheckBox.IsChecked = AppSettingsService.Current.EnableExperimentalExplorerTaskbarButtonImageCapture;
         TaskbarPollingIntervalTextBox.Text = AppSettingsService.Current.TaskbarPollingIntervalMs.ToString();
         TrayRefreshIntervalTextBox.Text = AppSettingsService.Current.TrayRefreshIntervalMs.ToString();
@@ -47,7 +45,6 @@ public partial class SettingsWindow : Window
     {
         AppSettingsService.Update(settings =>
         {
-            settings.EnableInvasiveTrayIconHook = EnableInvasiveTrayIconHookCheckBox.IsChecked == true;
             settings.EnableElevatedTrayIconHookAgent = EnableElevatedTrayIconHookAgentCheckBox.IsChecked == true;
             settings.ShowAllTrayIcons = ShowAllTrayIconsCheckBox.IsChecked == true;
             settings.PauseNonClockUpdatesWhileFullscreen = PauseUpdatesWhileFullscreenCheckBox.IsChecked == true;
@@ -56,7 +53,6 @@ public partial class SettingsWindow : Window
             settings.TaskbarThumbnailHoverDelayMs = ParseInterval(
                 TaskbarThumbnailHoverDelayTextBox.Text,
                 settings.TaskbarThumbnailHoverDelayMs);
-            settings.EnableExperimentalExplorerTaskbarHook = EnableExperimentalExplorerTaskbarHookCheckBox.IsChecked == true;
             settings.EnableExperimentalExplorerTaskbarButtonImageCapture = EnableExperimentalExplorerTaskbarButtonImageCaptureCheckBox.IsChecked == true;
             AppSettingsService.SetMonitorTaskbarSettings(
                 settings,

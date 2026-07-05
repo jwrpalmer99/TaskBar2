@@ -1,6 +1,4 @@
 using System.IO;
-using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.RegularExpressions;
 using TaskBar2.Models;
 
@@ -8,7 +6,6 @@ namespace TaskBar2.Services;
 
 internal static partial class PinnedTaskbarShortcutProvider
 {
-    private const int MaxLinkStringLength = 4096;
     private static readonly TimeSpan SignatureRefreshInterval = TimeSpan.FromSeconds(5);
     private static readonly object Sync = new();
     private static PinnedShortcutCache? Cache;
@@ -78,12 +75,12 @@ internal static partial class PinnedTaskbarShortcutProvider
 
     private static TaskbarItem? TryCreatePinnedItem(FileInfo shortcutFile)
     {
-        object? shellLinkObject = null;
         try
         {
-            shellLinkObject = new ShellLink();
-            var shellLink = (IShellLinkW)shellLinkObject;
-            ((IPersistFile)shellLink).Load(shortcutFile.FullName, 0);
+            if (!ShellLinkReader.TryLoadFile(shortcutFile.FullName, out var link))
+            {
+                return null;
+            }
 
             var title = Path.GetFileNameWithoutExtension(shortcutFile.Name).Trim();
             if (string.IsNullOrWhiteSpace(title))
@@ -91,21 +88,20 @@ internal static partial class PinnedTaskbarShortcutProvider
                 return null;
             }
 
-            var targetPath = NormalizePath(ReadString(builder => shellLink.GetPath(builder, builder.Capacity, IntPtr.Zero, 0)));
-            var arguments = ReadString(builder => shellLink.GetArguments(builder, builder.Capacity));
-            var workingDirectory = NormalizePath(ReadString(builder => shellLink.GetWorkingDirectory(builder, builder.Capacity)));
-            var iconLocation = ReadIconLocation(shellLink);
-            var iconPath = GetIconPath(iconLocation);
+            var targetPath = link.TargetPath;
+            var arguments = link.Arguments;
+            var workingDirectory = link.WorkingDirectory;
+            var iconPath = link.IconPath;
             var processPath = ResolveProcessPath(targetPath, iconPath, title);
             var processName = GetProcessName(processPath, arguments, title);
             var groupKey = GetPinnedGroupKey(processPath, processName, shortcutFile.FullName);
-            var icon = WindowIconProvider.GetIcon(IntPtr.Zero, processPath, iconPath, iconLocation.Index);
+            var icon = WindowIconProvider.GetIcon(IntPtr.Zero, processPath, iconPath, link.IconIndex);
 
             return new TaskbarItem(
                 IntPtr.Zero,
                 title,
                 icon,
-                GetFingerprint(shortcutFile, processPath, iconPath, iconLocation.Index, arguments),
+                GetFingerprint(shortcutFile, processPath, iconPath, link.IconIndex, arguments),
                 IsActive: false,
                 IsMinimized: false,
                 MonitorDeviceName: "",
@@ -115,50 +111,18 @@ internal static partial class PinnedTaskbarShortcutProvider
                 AppUserModelId: "",
                 groupKey,
                 iconPath,
-                iconLocation.Index,
+                link.IconIndex,
                 shortcutFile.FullName,
                 arguments,
                 workingDirectory);
         }
-        catch (Exception exception) when (exception is COMException or UnauthorizedAccessException or IOException or ArgumentException or ExternalException)
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException or ArgumentException)
         {
             DebugLogger.WriteIfChanged(
                 $"pinned-taskbar-shortcut-error-{shortcutFile.Name}",
                 $"Pinned taskbar shortcut failed to load: Shortcut={shortcutFile.FullName} {exception.GetType().Name}: {exception.Message}");
             return null;
         }
-        finally
-        {
-            if (shellLinkObject is not null)
-            {
-                Marshal.FinalReleaseComObject(shellLinkObject);
-            }
-        }
-    }
-
-    private static string ReadString(Func<StringBuilder, int> read)
-    {
-        var builder = new StringBuilder(MaxLinkStringLength);
-        return read(builder) == 0 ? builder.ToString().Trim() : "";
-    }
-
-    private static IconLocation ReadIconLocation(IShellLinkW shellLink)
-    {
-        var builder = new StringBuilder(MaxLinkStringLength);
-        return shellLink.GetIconLocation(builder, builder.Capacity, out var iconIndex) == 0
-            ? new IconLocation(builder.ToString().Trim(), iconIndex)
-            : default;
-    }
-
-    private static string GetIconPath(IconLocation iconLocation)
-    {
-        var value = iconLocation.Path;
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return "";
-        }
-
-        return NormalizePath(value);
     }
 
     private static string ResolveProcessPath(string targetPath, string iconPath, string title)
@@ -277,97 +241,5 @@ internal static partial class PinnedTaskbarShortcutProvider
     [GeneratedRegex("--processStart\\s+\"?(?<name>[^\"\\s]+)\"?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ProcessStartRegex();
 
-    private readonly record struct IconLocation(string Path, int Index);
-
     private sealed record PinnedShortcutCache(string Signature, IReadOnlyList<TaskbarItem> Items, DateTimeOffset LastChecked);
-
-    [ComImport]
-    [Guid("00021401-0000-0000-C000-000000000046")]
-    private sealed class ShellLink
-    {
-    }
-
-    [ComImport]
-    [Guid("0000010B-0000-0000-C000-000000000046")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IPersistFile
-    {
-        [PreserveSig]
-        int GetClassID(out Guid classId);
-
-        [PreserveSig]
-        int IsDirty();
-
-        [PreserveSig]
-        int Load([MarshalAs(UnmanagedType.LPWStr)] string fileName, uint mode);
-
-        [PreserveSig]
-        int Save([MarshalAs(UnmanagedType.LPWStr)] string fileName, bool remember);
-
-        [PreserveSig]
-        int SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string fileName);
-
-        [PreserveSig]
-        int GetCurFile([MarshalAs(UnmanagedType.LPWStr)] out string fileName);
-    }
-
-    [ComImport]
-    [Guid("000214F9-0000-0000-C000-000000000046")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IShellLinkW
-    {
-        [PreserveSig]
-        int GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder file, int maxPath, IntPtr findData, uint flags);
-
-        [PreserveSig]
-        int GetIDList(out IntPtr pidl);
-
-        [PreserveSig]
-        int SetIDList(IntPtr pidl);
-
-        [PreserveSig]
-        int GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder name, int maxName);
-
-        [PreserveSig]
-        int SetDescription([MarshalAs(UnmanagedType.LPWStr)] string name);
-
-        [PreserveSig]
-        int GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder directory, int maxPath);
-
-        [PreserveSig]
-        int SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string directory);
-
-        [PreserveSig]
-        int GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder arguments, int maxPath);
-
-        [PreserveSig]
-        int SetArguments([MarshalAs(UnmanagedType.LPWStr)] string arguments);
-
-        [PreserveSig]
-        int GetHotkey(out short hotkey);
-
-        [PreserveSig]
-        int SetHotkey(short hotkey);
-
-        [PreserveSig]
-        int GetShowCmd(out int showCommand);
-
-        [PreserveSig]
-        int SetShowCmd(int showCommand);
-
-        [PreserveSig]
-        int GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder iconPath, int iconPathCount, out int iconIndex);
-
-        [PreserveSig]
-        int SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string iconPath, int iconIndex);
-
-        [PreserveSig]
-        int SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, uint reserved);
-
-        [PreserveSig]
-        int Resolve(IntPtr hwnd, uint flags);
-
-        [PreserveSig]
-        int SetPath([MarshalAs(UnmanagedType.LPWStr)] string file);
-    }
 }

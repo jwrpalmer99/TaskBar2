@@ -318,12 +318,13 @@ internal static class JumpListMenuProvider
     private static JumpListMenuEntry? CreateEntry(object item)
     {
         var propertyTitle = ReadTitle(item);
-        if (item is IShellLinkW link)
+        if (item is ShellLinkReader.IShellLinkW link)
         {
-            var path = ReadShellLinkPath(link);
-            var arguments = ReadShellLinkString(link.GetArguments);
-            var workingDirectory = ReadShellLinkString(link.GetWorkingDirectory);
-            var description = ReadShellLinkString(link.GetDescription);
+            var linkInfo = ShellLinkReader.Read(link);
+            var path = linkInfo.TargetPath;
+            var arguments = linkInfo.Arguments;
+            var workingDirectory = linkInfo.WorkingDirectory;
+            var description = linkInfo.Description;
             var title = FirstNonEmpty(propertyTitle, description, GetReadableTargetName(path, arguments));
             if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(path))
             {
@@ -492,22 +493,6 @@ internal static class JumpListMenuProvider
         }
     }
 
-    private static string ReadShellLinkString(Func<StringBuilder, int, int> reader)
-    {
-        var builder = new StringBuilder(4096);
-        return reader(builder, builder.Capacity) >= 0
-            ? builder.ToString()
-            : "";
-    }
-
-    private static string ReadShellLinkPath(IShellLinkW link)
-    {
-        var builder = new StringBuilder(4096);
-        return link.GetPath(builder, builder.Capacity, IntPtr.Zero, flags: 0) >= 0
-            ? builder.ToString()
-            : "";
-    }
-
     private static string GetReadableTargetName(string path, string arguments)
     {
         if (!string.IsNullOrWhiteSpace(arguments) &&
@@ -631,65 +616,6 @@ internal static class JumpListMenuProvider
         int Compare(IShellItem shellItem, uint hint, out int order);
     }
 
-    [ComImport]
-    [Guid("000214F9-0000-0000-C000-000000000046")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IShellLinkW
-    {
-        [PreserveSig]
-        int GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder file, int maxPath, IntPtr findData, uint flags);
-
-        [PreserveSig]
-        int GetIDList(out IntPtr pidl);
-
-        [PreserveSig]
-        int SetIDList(IntPtr pidl);
-
-        [PreserveSig]
-        int GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder name, int maxName);
-
-        [PreserveSig]
-        int SetDescription([MarshalAs(UnmanagedType.LPWStr)] string name);
-
-        [PreserveSig]
-        int GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder directory, int maxPath);
-
-        [PreserveSig]
-        int SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string directory);
-
-        [PreserveSig]
-        int GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder arguments, int maxPath);
-
-        [PreserveSig]
-        int SetArguments([MarshalAs(UnmanagedType.LPWStr)] string arguments);
-
-        [PreserveSig]
-        int GetHotkey(out short hotkey);
-
-        [PreserveSig]
-        int SetHotkey(short hotkey);
-
-        [PreserveSig]
-        int GetShowCmd(out int showCommand);
-
-        [PreserveSig]
-        int SetShowCmd(int showCommand);
-
-        [PreserveSig]
-        int GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder iconPath, int iconPathCount, out int iconIndex);
-
-        [PreserveSig]
-        int SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string iconPath, int iconIndex);
-
-        [PreserveSig]
-        int SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, uint reserved);
-
-        [PreserveSig]
-        int Resolve(IntPtr hwnd, uint flags);
-
-        [PreserveSig]
-        int SetPath([MarshalAs(UnmanagedType.LPWStr)] string file);
-    }
 }
 
 internal sealed record JumpListMenuSection(string Title, IReadOnlyList<JumpListMenuEntry> Entries);
