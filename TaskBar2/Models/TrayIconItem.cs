@@ -12,6 +12,7 @@ public sealed record TrayIconItem(
     string Identity = "",
     string SourceProcessName = "",
     string SourceProcessPath = "",
+    string IconFingerprint = "",
     bool IsOverflow = false)
 {
     public bool HasIcon => Icon is not null;

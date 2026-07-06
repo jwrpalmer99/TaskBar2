@@ -60,6 +60,7 @@ internal static class TrayIconSnapshotStore
                      Identity: snapshot.Identity,
                      SourceProcessName: snapshot.SourceProcessName,
                      SourceProcessPath: snapshot.SourceProcessPath,
+                     IconFingerprint: snapshot.IconFingerprint,
                      IsOverflow: ShouldPlaceInOverflow(snapshot)))
             .ToArray();
     }

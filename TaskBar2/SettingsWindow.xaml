@@ -36,25 +36,31 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="Monitor"
                                        VerticalAlignment="Center"
-                                       Foreground="#202020" />
+                                       Foreground="#202020"
+                                       ToolTip="Choose which mirrored taskbar these monitor-specific settings apply to." />
                             <ComboBox x:Name="MonitorComboBox"
                                       Grid.Column="1"
                                       Height="28"
                                       DisplayMemberPath="Label"
                                       VerticalContentAlignment="Center"
+                                      ToolTip="Choose which mirrored taskbar these monitor-specific settings apply to."
                                       SelectionChanged="MonitorComboBox_SelectionChanged" />
                         </Grid>
                         <CheckBox x:Name="ShowOnlyThisMonitorCheckBox"
                                   Content="Show only apps on this monitor"
+                                  ToolTip="Only show open windows that are currently on this monitor. Pinned apps without windows are hidden while this is enabled."
                                   Margin="0,0,0,10" />
                         <CheckBox x:Name="MirrorPrimaryNotificationAreaCheckBox"
                                   Content="Mirror primary notification area"
+                                  ToolTip="Show tray icons on this taskbar. Turn this off for monitors where you only want app buttons."
                                   Margin="0,0,0,10" />
                         <CheckBox x:Name="ShowClockCheckBox"
                                   Content="Show clock"
+                                  ToolTip="Show or hide the clock on this monitor's mirrored taskbar."
                                   Margin="0,0,0,10" />
                         <CheckBox x:Name="AutomaticallyHideTaskbarCheckBox"
                                   Content="Automatically hide the taskbar"
+                                  ToolTip="Hide this mirrored taskbar until the pointer reaches the monitor edge, similar to the Windows taskbar auto-hide option."
                                   Margin="0,0,0,10" />
                         <Grid Margin="0,6,0,10">
                             <Grid.ColumnDefinitions>
@@ -63,10 +69,12 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="App button alignment"
                                        VerticalAlignment="Center"
-                                       Foreground="#202020" />
+                                       Foreground="#202020"
+                                       ToolTip="Choose whether app buttons start at the left edge or stay centered like the Windows 11 taskbar." />
                             <ComboBox x:Name="TaskbarButtonAlignmentComboBox"
                                       Grid.Column="1"
                                       Height="28"
+                                      ToolTip="Choose whether app buttons start at the left edge or stay centered like the Windows 11 taskbar."
                                       VerticalContentAlignment="Center">
                                 <ComboBoxItem Content="Left" />
                                 <ComboBoxItem Content="Center" />
@@ -80,7 +88,8 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="Taskbar scale"
                                        VerticalAlignment="Center"
-                                       Foreground="#202020" />
+                                       Foreground="#202020"
+                                       ToolTip="Resize this monitor's taskbar and app icons." />
                             <Slider x:Name="TaskbarScaleSlider"
                                     Grid.Column="1"
                                     Minimum="0.75"
@@ -88,6 +97,7 @@
                                     TickFrequency="0.05"
                                     IsSnapToTickEnabled="True"
                                     VerticalAlignment="Center"
+                                    ToolTip="Resize this monitor's taskbar and app icons."
                                     ValueChanged="TaskbarScaleSlider_ValueChanged" />
                             <TextBlock x:Name="TaskbarScaleTextBlock"
                                        Grid.Column="2"
@@ -103,7 +113,8 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="Taskbar opacity"
                                        VerticalAlignment="Center"
-                                       Foreground="#202020" />
+                                       Foreground="#202020"
+                                       ToolTip="Adjust how transparent this monitor's taskbar background is. Lower values let more of the desktop show through." />
                             <Slider x:Name="TaskbarOpacitySlider"
                                     Grid.Column="1"
                                     Minimum="0.35"
@@ -111,6 +122,7 @@
                                     TickFrequency="0.05"
                                     IsSnapToTickEnabled="True"
                                     VerticalAlignment="Center"
+                                    ToolTip="Adjust how transparent this monitor's taskbar background is. Lower values let more of the desktop show through."
                                     ValueChanged="TaskbarOpacitySlider_ValueChanged" />
                             <TextBlock x:Name="TaskbarOpacityTextBlock"
                                        Grid.Column="2"
@@ -128,18 +140,23 @@
                     <StackPanel>
                         <CheckBox x:Name="EnableElevatedTrayIconHookAgentCheckBox"
                                   Content="Run tray hook agent elevated"
+                                  ToolTip="Also capture tray icons from elevated apps. Windows may prompt for administrator permission."
                                   Margin="0,0,0,10" />
                         <CheckBox x:Name="ShowAllTrayIconsCheckBox"
                                   Content="Show ALL tray icons"
+                                  ToolTip="When enabled, include hidden overflow tray icons in the overflow flyout. When disabled, only show icons Windows marks as visible."
                                   Margin="0,0,0,10" />
                         <CheckBox x:Name="PauseUpdatesWhileFullscreenCheckBox"
                                   Content="Pause non-clock updates while fullscreen apps are running"
+                                  ToolTip="Reduce work while a fullscreen app or game is active. The clock can still update."
                                   Margin="0,0,0,10" />
                         <CheckBox x:Name="SuspendHookProcessingWhileFullscreenCheckBox"
                                   Content="Suspend hook processing while fullscreen apps are running"
+                                  ToolTip="More aggressively quiet background hook processing during fullscreen apps. Tray and app changes may catch up after fullscreen ends."
                                   Margin="0,0,0,10" />
                         <CheckBox x:Name="ShowTaskbarThumbnailsOnHoverCheckBox"
                                   Content="Show taskbar thumbnails on hover"
+                                  ToolTip="Show window previews when hovering over app buttons, similar to the Windows taskbar."
                                   Margin="0,0,0,10" />
                         <Grid Margin="0,0,0,10">
                             <Grid.ColumnDefinitions>
@@ -148,14 +165,17 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="Thumbnail hover delay (ms)"
                                        VerticalAlignment="Center"
-                                       Foreground="#202020" />
+                                       Foreground="#202020"
+                                       ToolTip="How long to wait before showing a taskbar thumbnail after hovering an app button." />
                             <TextBox x:Name="TaskbarThumbnailHoverDelayTextBox"
                                      Grid.Column="1"
                                      Height="28"
+                                     ToolTip="How long to wait before showing a taskbar thumbnail after hovering an app button."
                                      VerticalContentAlignment="Center" />
                         </Grid>
                         <CheckBox x:Name="EnableExperimentalExplorerTaskbarButtonImageCaptureCheckBox"
                                   Content="Enable experimental Explorer app icon screen capture"
+                                  ToolTip="Use captured Explorer taskbar button images for app icons and badges. Leave disabled unless normal icons are missing badge details."
                                   Margin="0,0,0,10" />
                         <Grid Margin="0,6,0,10">
                             <Grid.ColumnDefinitions>
@@ -164,10 +184,12 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="Taskbar polling interval (ms)"
                                        VerticalAlignment="Center"
-                                       Foreground="#202020" />
+                                       Foreground="#202020"
+                                       ToolTip="How often TaskBar2 refreshes the open-window list. Higher values use less CPU but can update more slowly." />
                             <TextBox x:Name="TaskbarPollingIntervalTextBox"
                                      Grid.Column="1"
                                      Height="28"
+                                     ToolTip="How often TaskBar2 refreshes the open-window list. Higher values use less CPU but can update more slowly."
                                      VerticalContentAlignment="Center" />
                         </Grid>
                         <Grid Margin="0,0,0,10">
@@ -177,10 +199,12 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="Tray geometry refresh interval (ms)"
                                        VerticalAlignment="Center"
-                                       Foreground="#202020" />
+                                       Foreground="#202020"
+                                       ToolTip="How often TaskBar2 refreshes tray icon positions used for forwarding clicks. Higher values reduce polling." />
                             <TextBox x:Name="TrayRefreshIntervalTextBox"
                                      Grid.Column="1"
                                      Height="28"
+                                     ToolTip="How often TaskBar2 refreshes tray icon positions used for forwarding clicks. Higher values reduce polling."
                                      VerticalContentAlignment="Center" />
                         </Grid>
                         <TextBlock Text="Settings apply immediately and are saved for the next launch."

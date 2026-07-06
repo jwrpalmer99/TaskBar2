@@ -2968,7 +2968,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
 
         var key = GetTrayKey(item);
         if (_trayImageCache.TryGetValue(key, out var cached) &&
-            ReferenceEquals(cached.Source, item.Icon))
+            string.Equals(cached.Fingerprint, item.IconFingerprint, StringComparison.Ordinal))
         {
             cached.EnsureBitmap(_renderTarget!);
             return cached;
@@ -2985,7 +2985,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return null;
         }
 
-        var trayIcon = new NativeTrayIconImage(item.Icon, bitmapSource);
+        var trayIcon = new NativeTrayIconImage(item.IconFingerprint, bitmapSource);
         trayIcon.EnsureBitmap(_renderTarget!);
         _trayImageCache[key] = trayIcon;
         return trayIcon;
@@ -3104,7 +3104,7 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     private static string BuildTrayVisualSignature(IReadOnlyList<TrayIconItem> items)
     {
         return string.Join("|", items.Select(item =>
-            $"{GetTrayKey(item)}:{RuntimeHelpers.GetHashCode(item.Icon)}"));
+            $"{GetTrayKey(item)}:{item.IconFingerprint}"));
     }
 
     private static IReadOnlyList<NativeTaskbarGroup> BuildWindowGroups(IReadOnlyList<TaskbarItem> items)
@@ -3805,9 +3805,9 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         }
     }
 
-    private sealed class NativeTrayIconImage(WpfImageSource source, BitmapSource sourceBitmap) : IDisposable
+    private sealed class NativeTrayIconImage(string fingerprint, BitmapSource sourceBitmap) : IDisposable
     {
-        public WpfImageSource Source { get; } = source;
+        public string Fingerprint { get; } = fingerprint;
 
         public BitmapSource SourceBitmap { get; } = sourceBitmap;
 
