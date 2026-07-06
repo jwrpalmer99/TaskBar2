@@ -1,0 +1,80 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    env:
+      CONFIGURATION: Release
+      PROJECT: TaskBar2/TaskBar2.csproj
+      PUBLISH_DIR: artifacts/TaskBar2
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore $env:PROJECT
+
+      - name: Build
+        run: dotnet build $env:PROJECT -c $env:CONFIGURATION --no-restore
+
+      - name: Publish
+        shell: pwsh
+        run: |
+          Remove-Item $env:PUBLISH_DIR -Recurse -Force -ErrorAction SilentlyContinue
+          dotnet publish $env:PROJECT -c $env:CONFIGURATION --no-build --no-restore -o $env:PUBLISH_DIR
+
+          $hookRoot = Join-Path "TaskBar2/bin/$env:CONFIGURATION/net8.0-windows" "TrayHookAgent"
+          if (Test-Path $hookRoot) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $env:PUBLISH_DIR "TrayHookAgent") | Out-Null
+            Get-ChildItem $hookRoot -Directory |
+              Sort-Object Name -Descending |
+              Select-Object -First 1 |
+              ForEach-Object {
+                Copy-Item $_.FullName (Join-Path $env:PUBLISH_DIR "TrayHookAgent") -Recurse -Force
+              }
+          }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME } else { "ci-$env:GITHUB_RUN_NUMBER" }
+          $zip = "artifacts/TaskBar2-$version-win-x64.zip"
+          Remove-Item $zip -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path "$env:PUBLISH_DIR/*" -DestinationPath $zip
+          "RELEASE_ZIP=$zip" >> $env:GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TaskBar2-win-x64
+          path: artifacts/TaskBar2-*-win-x64.zip
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:GITHUB_REF_NAME *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:GITHUB_REF_NAME $env:RELEASE_ZIP --title $env:GITHUB_REF_NAME --generate-notes
+          } else {
+            gh release upload $env:GITHUB_REF_NAME $env:RELEASE_ZIP --clobber
+          }

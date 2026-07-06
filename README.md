@@ -1,36 +1,83 @@
 # TaskBar2
 
-TaskBar2 is a WPF prototype that creates appbar windows on secondary monitors and replicates a taskbar-like surface.
+TaskBar2 adds a Windows taskbar to secondary monitors. It mirrors your open apps, pinned apps, tray icons, clock, hover previews, and right-click menus so extra monitors feel closer to the primary Windows taskbar. 
 
-## Current behavior
+For OLED users worried about taskbar burn-in, you can set your Windows taskbar to just be on primary monitor and autohide, then use an always visible TaskBar2 on your other monitors.
 
-- Creates a bottom appbar on each non-primary monitor.
-- Shows all eligible top-level application windows as icon buttons on every secondary taskbar.
-- Can be configured to show only the apps on each secondary monitor.
-- Can align app buttons to the left or center of the secondary taskbar.
-- Can scale the taskbar height and icon/button sizes.
-- Has separate configurable intervals for taskbar polling and tray geometry refresh.
-- Left-click activates, restores, or minimizes the target window.
-- Right-clicking an app button opens that window's native system menu.
-- Mirrors notification icons from hook-fed snapshots when available, otherwise falls back to Explorer toolbar/UI Automation probing.
-- Hook-fed tray icons can receive left and right click routing through their captured `NOTIFYICONDATA` callback target.
-- The invasive live tray icon hook is opt-in from Settings and runs through an EasyHook-based helper agent.
-- Elevated tray apps can be captured by enabling the separate elevated hook-agent setting and approving the UAC prompt.
-- Right-clicking empty taskbar space opens a TaskBar2 menu with Settings, Refresh, and Exit.
-- A TaskBar2 tray icon also exposes Settings, Refresh displays, and Exit.
-- Debug output is written to `%APPDATA%\TaskBar2\taskbar2.log` and can be opened from the TaskBar2 context menu.
-- The app-side tray hook endpoint is written to `%APPDATA%\TaskBar2\tray-hook-endpoint.json`.
+## What It Does
 
-## Known limits
+- Shows a taskbar on each non-primary monitor.
+- Mirrors pinned and running app buttons in the same order as the primary taskbar.
+- Supports grouped app buttons, hover previews, and basic jump-list style menus.
+- Mirrors tray icons, including live icon updates from supported apps.
+- Routes tray icon clicks and right-click menus back to the real app.
+- Supports per-monitor scale, alignment, clock visibility, notification area visibility, opacity, and auto-hide.
+- Can pause most updates while a fullscreen app or game is running.
+- Follows Windows light/dark mode.
 
-Windows does not provide a supported public API for third-party apps to enumerate and own Explorer's notification area icons exactly like Explorer does. The current non-invasive fallback reads classic tray toolbars where available and uses UI Automation/rendered-icon probing on Windows 11 when Explorer exposes a visible tray surface.
+## Download And Run
 
-Truly live tray icons while Explorer never renders the primary tray require a hook/injector that captures `NOTIFYICONDATA.hIcon` from `Shell_NotifyIconW/A` calls in the source processes. TaskBar2 includes an opt-in EasyHook helper for that path. See `docs/tray-hook-architecture.md`.
+1. Download the latest release zip from GitHub Releases.
+2. Extract it to a normal folder, for example `C:\Tools\TaskBar2`.
+3. Run `TaskBar2.exe`.
 
-Unread badges and progress overlays are also not exposed as a simple taskbar enumeration API. Matching DisplayFusion-level fidelity will require deeper shell integration, accessibility/UI Automation probing, or an Explorer-adjacent hook strategy.
+To close TaskBar2, right-click the TaskBar2 tray icon or an empty area of the mirrored taskbar and choose `Exit`.
 
-## Run
+## Settings
+
+Right-click the TaskBar2 tray icon or an empty area of the mirrored taskbar, then choose `Settings`.
+
+Useful settings include:
+
+- `Show only apps on this monitor`
+- `Mirror primary notification area`
+- `Show ALL tray icons`
+- `Show clock`
+- `Automatically hide the taskbar`
+- `Taskbar scale`
+- `Taskbar opacity`
+- `Pause updates while fullscreen apps are running`
+
+Some settings are global. Monitor-specific settings are grouped under the selected monitor in the Settings window.
+
+## Startup
+
+TaskBar2 can be started automatically with Windows by creating a Scheduled Task that runs `TaskBar2.exe` when you log on.
+
+If tray icons are missing immediately after logon, exit TaskBar2 and start it again. Some tray apps register late during Windows startup, and TaskBar2 is still improving this path.
+
+## Troubleshooting
+
+- If a tray icon is missing, restart that app first.
+- If several tray icons are missing after a TaskBar2 update, restart TaskBar2.
+- If an injected tray app behaves oddly, restart that app.
+- Debug logs are written to `%APPDATA%\TaskBar2`.
+
+## Developer Notes
+
+TaskBar2 is a .NET Windows app with a native Win32/Direct2D taskbar renderer. It uses helper hook agents for shell integration that Windows does not expose through a normal public API.
+
+The tray icon hook captures `NOTIFYICONDATA` updates from apps that call `Shell_NotifyIconW/A`. This is needed because Windows does not provide a supported API for a third-party app to enumerate and fully own Explorer's notification area.
+
+The Explorer taskbar hook is used to improve taskbar button order, pinned apps, icons, and related metadata. Some behavior is private, version-sensitive, and may differ from Explorer.
+
+See [docs/tray-hook-architecture.md](docs/tray-hook-architecture.md) for more detail.
+
+## Build
 
 ```powershell
-dotnet run --project .\TaskBar2\TaskBar2.csproj
+dotnet build .\TaskBar2\TaskBar2.csproj -c Release
 ```
+
+## Release Automation
+
+GitHub Actions builds TaskBar2 on pull requests and pushes to `main`.
+
+To create an end-user release, push a version tag:
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow publishes a Windows zip to the matching GitHub Release.
