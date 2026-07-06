@@ -19,6 +19,12 @@ concurrency:
 
 jobs:
   deploy:
+    # Job-level permissions are set explicitly to ensure the token can create/update Pages
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -33,3 +39,7 @@ jobs:
           path: docs
       - id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          # Use a PAT from secrets.GH_PAGES_PAT if provided (useful when org settings restrict GITHUB_TOKEN),
+          # otherwise fall back to the built-in github.token (GITHUB_TOKEN).
+          token: ${{ secrets.GH_PAGES_PAT || github.token }}
