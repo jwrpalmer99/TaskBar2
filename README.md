@@ -17,6 +17,12 @@ For OLED users worried about taskbar burn-in, you can set your Windows taskbar t
 
 ## Download And Run
 
+Runtime requirements:
+
+- Windows 11.
+- [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0).
+- .NET Framework 4.8 for the tray hook agent. This is already included on Windows 11.
+
 1. Download the latest release zip from GitHub Releases.
 2. Extract it to a normal folder, for example `C:\Program Files\TaskBar2`.
 3. Run `TaskBar2.exe`.
