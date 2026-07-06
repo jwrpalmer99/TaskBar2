@@ -18,7 +18,7 @@ For OLED users worried about taskbar burn-in, you can set your Windows taskbar t
 ## Download And Run
 
 1. Download the latest release zip from GitHub Releases.
-2. Extract it to a normal folder, for example `C:\Tools\TaskBar2`.
+2. Extract it to a normal folder, for example `C:\Program Files\TaskBar2`.
 3. Run `TaskBar2.exe`.
 
 To close TaskBar2, right-click the TaskBar2 tray icon or an empty area of the mirrored taskbar and choose `Exit`.

@@ -17,6 +17,7 @@ jobs:
     env:
       CONFIGURATION: Release
       PROJECT: TaskBar2/TaskBar2.csproj
+      AGENT_PROJECT: TrayHook/TaskBar2.TrayHook.Agent/TaskBar2.TrayHook.Agent.csproj
       PUBLISH_DIR: artifacts/TaskBar2
 
     steps:
@@ -29,7 +30,9 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Restore
-        run: dotnet restore $env:PROJECT
+        run: |
+          dotnet restore $env:AGENT_PROJECT
+          dotnet restore $env:PROJECT
 
       - name: Build
         run: dotnet build $env:PROJECT -c $env:CONFIGURATION --no-restore
