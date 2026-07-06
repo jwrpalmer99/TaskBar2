@@ -36,11 +36,6 @@ jobs:
       - uses: actions/configure-pages@v5
         with:
           enablement: true
-      - name: Delete old artifacts
-        uses: geekyeggo/delete-artifact@v2
-        with:
-          name: github-pages
-          failOnError: false
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs
