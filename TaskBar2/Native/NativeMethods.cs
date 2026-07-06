@@ -48,6 +48,7 @@ internal static class NativeMethods
     internal const int WM_LBUTTONDBLCLK = 0x0203;
     internal const int WM_RBUTTONDOWN = 0x0204;
     internal const int WM_RBUTTONUP = 0x0205;
+    internal const int NIN_SELECT = 0x0400;
     internal const int WM_THEMECHANGED = 0x031A;
     internal const int WM_DWMCOLORIZATIONCOLORCHANGED = 0x0320;
     internal const int MK_LBUTTON = 0x0001;

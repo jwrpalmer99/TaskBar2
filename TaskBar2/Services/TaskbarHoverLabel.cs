@@ -8,6 +8,7 @@ namespace TaskBar2.Services;
 internal sealed class TaskbarHoverLabel : ToolStripDropDown
 {
     private const int MaxTitleLength = 72;
+    private const int MaxLines = 6;
     private const int HorizontalPadding = 12;
     private const int VerticalPadding = 7;
     private static readonly TimeSpan CloseDelay = TimeSpan.FromMilliseconds(350);
@@ -23,6 +24,7 @@ internal sealed class TaskbarHoverLabel : ToolStripDropDown
         Margin = FormsPadding.Empty;
 
         var displayTitle = ClipTitle(string.IsNullOrWhiteSpace(title) ? "App" : title.Trim());
+        var isMultiline = displayTitle.Contains('\n', StringComparison.Ordinal);
         var background = lightTheme
             ? Color.FromArgb(248, 248, 248)
             : Color.FromArgb(31, 31, 31);
@@ -37,7 +39,7 @@ internal sealed class TaskbarHoverLabel : ToolStripDropDown
             displayTitle,
             SystemFonts.MenuFont,
             new Size(460, 0),
-            TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+            TextFormatFlags.NoPrefix | (isMultiline ? TextFormatFlags.WordBreak : TextFormatFlags.SingleLine));
 
         var label = new ToolStripLabel(displayTitle)
         {
@@ -47,7 +49,7 @@ internal sealed class TaskbarHoverLabel : ToolStripDropDown
             Margin = FormsPadding.Empty,
             Padding = FormsPadding.Empty,
             Size = new Size(textSize.Width + HorizontalPadding * 2, textSize.Height + VerticalPadding * 2),
-            TextAlign = ContentAlignment.MiddleCenter,
+            TextAlign = isMultiline ? ContentAlignment.MiddleLeft : ContentAlignment.MiddleCenter,
             ToolTipText = title
         };
 
@@ -123,11 +125,24 @@ internal sealed class TaskbarHoverLabel : ToolStripDropDown
 
     private static string ClipTitle(string title)
     {
-        if (title.Length <= MaxTitleLength)
+        var lines = title
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Take(MaxLines)
+            .Select(ClipLine)
+            .ToArray();
+
+        return lines.Length == 0 ? "App" : string.Join("\n", lines);
+    }
+
+    private static string ClipLine(string line)
+    {
+        if (line.Length <= MaxTitleLength)
         {
-            return title;
+            return line;
         }
 
-        return title[..(MaxTitleLength - 3)] + "...";
+        return line[..(MaxTitleLength - 3)] + "...";
     }
 }

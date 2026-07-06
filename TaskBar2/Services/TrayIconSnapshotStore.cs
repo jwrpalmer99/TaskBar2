@@ -502,6 +502,13 @@ internal static class TrayIconSnapshotStore
 
     private static void ForwardLeftClick(TrayIconClickTarget target)
     {
+        if (target.NotificationVersion >= 4)
+        {
+            PrepareForegroundMenuOwner(target.OwnerHwnd);
+            PostNotification(target, NativeMethods.NIN_SELECT);
+            return;
+        }
+
         PostNotification(target, NativeMethods.WM_LBUTTONDOWN);
         PostNotification(target, NativeMethods.WM_LBUTTONUP);
     }
@@ -519,11 +526,13 @@ internal static class TrayIconSnapshotStore
         if (target.NotificationVersion >= 4)
         {
             PostNotification(target, NativeMethods.WM_CONTEXTMENU);
+            PostOwnerNullMessageLater(target.OwnerHwnd);
             return;
         }
 
         PostNotification(target, NativeMethods.WM_RBUTTONDOWN);
         PostNotification(target, NativeMethods.WM_RBUTTONUP);
+        PostOwnerNullMessageLater(target.OwnerHwnd);
     }
 
     private static void PrepareForegroundMenuOwner(IntPtr ownerHwnd)
@@ -546,6 +555,18 @@ internal static class TrayIconSnapshotStore
         catch
         {
         }
+    }
+
+    private static void PostOwnerNullMessageLater(IntPtr ownerHwnd)
+    {
+        if (ownerHwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        _ = Task.Delay(150).ContinueWith(
+            _ => NativeMethods.PostMessage(ownerHwnd, NativeMethods.WM_NULL, IntPtr.Zero, IntPtr.Zero),
+            TaskScheduler.Default);
     }
 
     private static void PostNotification(TrayIconClickTarget target, int notificationMessage)

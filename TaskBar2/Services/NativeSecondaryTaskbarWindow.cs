@@ -1091,9 +1091,10 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return;
         }
 
+        var hoveredTrayButton = HitTestTray(x, y);
         var hoveredTray = HitTestTrayOverflow(x, y)
             ? TrayOverflowButtonKey
-            : HitTestTray(x, y)?.Key ?? "";
+            : hoveredTrayButton?.Key ?? "";
         var hoveredButton = string.IsNullOrEmpty(hoveredTray)
             ? HitTestTaskbarButton(x, y)
             : null;
@@ -1104,10 +1105,28 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return;
         }
 
+        if (!string.IsNullOrEmpty(hoveredTray))
+        {
+            CloseGroupFlyout();
+        }
+
         _hoverHwnd = hovered;
         _hoverGroupKey = hoveredGroupKey;
         _hoverTrayKey = hoveredTray;
-        ScheduleGroupFlyout(hoveredButton);
+
+        if (hoveredTrayButton is not null)
+        {
+            ShowTrayHoverLabel(hoveredTrayButton);
+        }
+        else if (hoveredTray == TrayOverflowButtonKey)
+        {
+            CloseGroupFlyout();
+        }
+        else
+        {
+            ScheduleGroupFlyout(hoveredButton);
+        }
+
         QueueRender();
     }
 
@@ -1232,6 +1251,11 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
     {
         if (TrayIconSnapshotStore.TryForwardClick(item, rightClick))
         {
+            if (!rightClick)
+            {
+                ScheduleFocusTraySourceWindow(item);
+            }
+
             return;
         }
     }
@@ -1241,6 +1265,41 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         if (TrayIconSnapshotStore.TryForwardClick(item, rightClick: false, doubleClick: true))
         {
             return;
+        }
+    }
+
+    private void ScheduleFocusTraySourceWindow(TrayIconItem item)
+    {
+        if (string.IsNullOrWhiteSpace(item.SourceProcessPath) &&
+            string.IsNullOrWhiteSpace(item.SourceProcessName))
+        {
+            return;
+        }
+
+        _ = Task.Delay(150).ContinueWith(
+            _ => _dispatcher.BeginInvoke(new Action(() => TryFocusTraySourceWindow(item)), DispatcherPriority.Background),
+            TaskScheduler.Default);
+    }
+
+    private void TryFocusTraySourceWindow(TrayIconItem item)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var processPath = NormalizePath(item.SourceProcessPath);
+        var processName = NormalizeProcessName(item.SourceProcessName);
+        var match = _currentWindows.FirstOrDefault(window =>
+            window.Hwnd != IntPtr.Zero &&
+            ((!string.IsNullOrEmpty(processPath) &&
+              string.Equals(NormalizePath(window.ProcessPath), processPath, StringComparison.OrdinalIgnoreCase)) ||
+             (!string.IsNullOrEmpty(processName) &&
+              string.Equals(NormalizeProcessName(window.ProcessName), processName, StringComparison.OrdinalIgnoreCase))));
+
+        if (match is not null && match.Hwnd != IntPtr.Zero)
+        {
+            WindowActions.Activate(match.Hwnd);
         }
     }
 
@@ -1481,6 +1540,46 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
         label.ShowNear(screenBounds, _screen.WorkingArea);
         _pendingFlyoutButton = null;
         EnsureHoverPopupPollRunning();
+    }
+
+    private void ShowTrayHoverLabel(NativeTrayButton button)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var title = GetTrayHoverTitle(button.Item);
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return;
+        }
+
+        var labelKey = "tray:" + button.Key;
+        if (_hoverLabel is { Visible: true } && _hoverLabel.GroupKey == labelKey)
+        {
+            return;
+        }
+
+        var label = new TaskbarHoverLabel(labelKey, title, _systemUsesLightTheme);
+        _hoverLabel = label;
+        label.Closed += (_, _) => OnHoverLabelClosed(label);
+        label.ShowNear(GetScreenBounds(button.Bounds), _screen.WorkingArea);
+    }
+
+    private static string GetTrayHoverTitle(TrayIconItem item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.ToolTip))
+        {
+            return item.ToolTip.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.SourceProcessName))
+        {
+            return Path.GetFileNameWithoutExtension(item.SourceProcessName);
+        }
+
+        return "Notification icon";
     }
 
     private void ShowGroupFlyout(NativeTaskbarButton button)
@@ -2384,6 +2483,9 @@ internal sealed class NativeSecondaryTaskbarWindow : ISecondaryTaskbarHost
             return path.Trim();
         }
     }
+
+    private static string NormalizeProcessName(string processName) =>
+        Path.GetFileNameWithoutExtension(processName.Trim());
 
     private void RenderIcons(ID2D1HwndRenderTarget target, NativeLayout layout, NativeTrayLayout trayLayout)
     {
