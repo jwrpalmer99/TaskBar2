@@ -12,7 +12,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
-  actions: read
+  actions: write
 
 concurrency:
   group: pages
@@ -25,7 +25,7 @@ jobs:
       contents: read
       pages: write
       id-token: write
-      actions: read
+      actions: write
 
     environment:
       name: github-pages
