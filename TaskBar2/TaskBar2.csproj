@@ -21,10 +21,13 @@
   </Target>
 
   <Target Name="CopyTrayHookAgent" AfterTargets="Build" Condition="'$(SkipTrayHookAgentBuild)' != 'true' And Exists('..\TrayHook\TaskBar2.TrayHook.Agent\bin\$(Configuration)\net48\TaskBar2.TrayHook.Agent.exe')">
+    <PropertyGroup>
+      <TrayHookPayloadFolder>$(OutputPath)TrayHookAgent\$([System.DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))\</TrayHookPayloadFolder>
+    </PropertyGroup>
     <ItemGroup>
       <TrayHookAgentFiles Include="..\TrayHook\TaskBar2.TrayHook.Agent\bin\$(Configuration)\net48\**\*.*" />
     </ItemGroup>
-    <Copy SourceFiles="@(TrayHookAgentFiles)" DestinationFiles="@(TrayHookAgentFiles->'$(OutputPath)TrayHookAgent\Current\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(TrayHookAgentFiles)" DestinationFiles="@(TrayHookAgentFiles->'$(TrayHookPayloadFolder)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

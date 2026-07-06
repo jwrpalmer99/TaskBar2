@@ -575,8 +575,23 @@ internal sealed class TrayHookAgentService : IDisposable
     private static string? ResolveAgentPath()
     {
         var baseDirectory = AppContext.BaseDirectory;
+        var agentRoot = Path.Combine(baseDirectory, "TrayHookAgent");
+        var latestPayload = Directory.Exists(agentRoot)
+            ? Directory.GetDirectories(agentRoot)
+                .Select(directory => new
+                {
+                    Path = Path.Combine(directory, "TaskBar2.TrayHook.Agent.exe"),
+                    LastWriteTimeUtc = Directory.GetLastWriteTimeUtc(directory)
+                })
+                .Where(candidate => File.Exists(candidate.Path))
+                .OrderByDescending(candidate => candidate.LastWriteTimeUtc)
+                .Select(candidate => candidate.Path)
+                .FirstOrDefault()
+            : null;
+
         var fixedCandidates = new[]
         {
+            latestPayload,
             Path.Combine(baseDirectory, "TrayHookAgent", "Current", "TaskBar2.TrayHook.Agent.exe"),
             Path.Combine(baseDirectory, "TrayHookAgent", "TaskBar2.TrayHook.Agent.exe"),
             Path.Combine(baseDirectory, "TaskBar2.TrayHook.Agent.exe"),
@@ -594,7 +609,7 @@ internal sealed class TrayHookAgentService : IDisposable
                 "TaskBar2.TrayHook.Agent.exe"))
         };
 
-        return fixedCandidates.FirstOrDefault(File.Exists);
+        return fixedCandidates.FirstOrDefault(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path));
     }
 
     private static string QuoteArgument(string argument)

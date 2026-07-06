@@ -130,8 +130,10 @@ internal static class HookPayloadShadowCopy
 internal sealed class HookAgent
 {
     private const int StartupFastScanCount = 5;
+    private const int StartupTransientRetryMs = 2000;
     private const int TrayIdleScanIntervalMs = 5000;
     private const int ExplorerIdleScanIntervalMs = 15000;
+    private static readonly TimeSpan StartupTransientFailureWindow = TimeSpan.FromMinutes(1);
 
     private static readonly HashSet<string> ExcludedProcessNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -169,7 +171,9 @@ internal sealed class HookAgent
     private readonly bool _enableTrayIconHook;
     private readonly bool _enableExplorerTaskbarHook;
     private readonly bool _enableExplorerTaskbarButtonImageCapture;
+    private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
     private DateTimeOffset _lastTaskbarCreatedBroadcast = DateTimeOffset.MinValue;
+    private bool _residentInjecteeSeenInScan;
     private int _startupScanBroadcastsRemaining = 3;
     private int _startupFastScansRemaining = StartupFastScanCount;
 
@@ -249,6 +253,7 @@ internal sealed class HookAgent
 
         var now = DateTimeOffset.UtcNow;
         var injectedCount = 0;
+        _residentInjecteeSeenInScan = false;
         var processNameFilter = BuildProcessNameFilter();
         var processes = ProcessSnapshotProvider.GetProcesses(processNameFilter);
         PruneProcessState(processes);
@@ -270,7 +275,7 @@ internal sealed class HookAgent
             _startupScanBroadcastsRemaining--;
         }
 
-        if (injectedCount > 0 || startupBroadcast)
+        if (injectedCount > 0 || _residentInjecteeSeenInScan || startupBroadcast)
         {
             BroadcastTaskbarCreated(injectedCount, force: startupBroadcast);
         }
@@ -386,19 +391,20 @@ internal sealed class HookAgent
                 return false;
             }
 
+            if (!MatchesTargetMode(process))
+            {
+                return false;
+            }
+
             if (HasResidentInjectee(process))
             {
                 _injectedProcessIds.Add(process.Id);
+                _residentInjecteeSeenInScan = true;
                 AgentLog.Write($"Skipped resident injected process. Agent={_agentName} {DescribeProcess(process)}");
                 return false;
             }
 
             if (_failedUntil.TryGetValue(process.Id, out var retryAt) && retryAt > now)
-            {
-                return false;
-            }
-
-            if (!MatchesTargetMode(process))
             {
                 return false;
             }
@@ -453,6 +459,14 @@ internal sealed class HookAgent
         }
         catch (Exception exception)
         {
+            var now = DateTimeOffset.UtcNow;
+            if (now - _startedAt < StartupTransientFailureWindow)
+            {
+                _failedUntil[process.Id] = now.AddMilliseconds(StartupTransientRetryMs);
+                AgentLog.Write($"Skipped process. Agent={_agentName} {DescribeProcess(process)} RetryIn={StartupTransientRetryMs / 1000:0}s StartupTransient=True HResult=0x{exception.HResult:X8}: {exception.GetType().Name}: {exception.Message}");
+                return false;
+            }
+
             var failureCount = _failureCounts.TryGetValue(process.Id, out var existingFailureCount)
                 ? existingFailureCount + 1
                 : 1;

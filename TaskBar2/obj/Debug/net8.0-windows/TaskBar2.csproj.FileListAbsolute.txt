@@ -168,3 +168,4 @@ C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\TaskBar2.deps
 C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\TaskBar2.runtimeconfig.json
 C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\TaskBar2.dll
 C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-paused-trace\TaskBar2.pdb
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\debug-verify\TaskBar2.exe

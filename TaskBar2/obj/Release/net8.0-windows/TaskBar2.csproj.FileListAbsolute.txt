@@ -153,3 +153,8 @@ C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-verify\TaskBar2.deps.jso
 C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-verify\TaskBar2.runtimeconfig.json
 C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-verify\TaskBar2.dll
 C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-verify\TaskBar2.pdb
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-memory-verify\TaskBar2.exe
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-memory-verify\TaskBar2.deps.json
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-memory-verify\TaskBar2.runtimeconfig.json
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-memory-verify\TaskBar2.dll
+C:\Users\Jeremy\source\repos\TaskBar2\artifacts\release-memory-verify\TaskBar2.pdb
